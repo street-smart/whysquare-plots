@@ -23,6 +23,8 @@ const ICON = {
   back: '<path d="M11 5l-7 7 7 7M4 12h16"/>',
   edit: '<path d="M4 20l1-4L16 5l3 3L8 19z"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  zin: '<path d="M12 5v14M5 12h14"/>',
+  zout: '<path d="M5 12h14"/>',
 };
 const ico = n => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[n]}</svg>`;
 
@@ -95,6 +97,8 @@ function route() {
   onEsc = null;
   app.oninput = app.onsubmit = app.onchange = null;
   const [path, qs] = location.hash.slice(1).split('?');
+  // opening the site with no address after it shows the default project; '#/' (the back arrow) still reaches the dashboard
+  if (!path && db.defaultProject && db.workspaces.some(w => w.projects.some(x => x.id === db.defaultProject))) return location.replace(`#/p/${db.defaultProject}`);
   const m = path.match(/^\/p\/(\w+)(\/edit)?$/);
   let p;
   if (m) for (const w of db.workspaces) p = p || w.projects.find(x => x.id === m[1]);
@@ -123,6 +127,7 @@ function renderDash(wid) {
       <div><div class="bar">${Object.entries(STATUS).map(([k, [, c]]) => `<span style="flex:${count(p, k)};background:${c}"></span>`).join('')}</div>
       <ul>${Object.entries(STATUS).map(([k, [n, c]]) => `<li><i style="background:${c}"></i>${count(p, k)} ${n}</li>`).join('')}</ul></div>
       <div class="acts"><a class="primary" href="#/p/${p.id}">Open</a><a class="pill" href="#/p/${p.id}/edit">Edit</a>
+      ${db.defaultProject === p.id ? '<small class="def">Opens first</small>' : `<button data-a="def-p" data-id="${p.id}">Open first</button>`}
       <button class="danger" data-a="del-p" data-id="${p.id}">Delete</button></div></article>`).join('') || '<p class="empty">No projects yet. Create one to start drawing plots.</p>'}</div>`
     : '<p class="empty">Create a workspace to begin.</p>'}</main>`;
 
@@ -134,6 +139,7 @@ function renderDash(wid) {
       const n = prompt('Project name')?.trim();
       if (n) { const x = { id: uid(), name: n, tagline: '', info: '', phone: '', gallery: [], center: [20.5937, 78.9629], zoom: 5, plots: [] }; w.projects.push(x); save(); nav(`#/p/${x.id}/edit`); }
     },
+    'def-p'(el) { db.defaultProject = el.dataset.id; save(); route(); },
     'del-p'(el) { const x = w.projects.find(q => q.id === el.dataset.id); if (x && confirm(`Delete project "${x.name}" and its ${x.plots.length} shape(s)? This cannot be undone.`)) { w.projects = w.projects.filter(q => q !== x); save(); route(); } },
     export() { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 1)], { type: 'application/json' })); a.download = 'whysquare-plots-backup.json'; a.click(); },
     import() {
@@ -170,7 +176,7 @@ function renderMap(p, edit, params) {
   ${edit ? `<div class="editbar">${b('draw', '+ Draw shape')}<button class="primary" data-a="finish">Finish shape</button>${b('cancel', 'Cancel')}
     ${b('overlay', 'Tracing overlay')}${b('settings', 'Project settings')}${b('sethome', 'Set home view')}${b('cad', 'Export CAD')}
     <form id="goto"><input name="ll" placeholder="lat, lng" aria-label="Go to latitude, longitude"><button>Go</button></form></div>` : ''}
-  <div class="tools">${rb('ruler', 'Ruler')}${rb('home', 'Home view')}${rb('filters', 'Filters')}${rb('share', 'Share')}</div>
+  <div class="tools">${rb('zin', 'Zoom in')}${rb('zout', 'Zoom out')}${rb('ruler', 'Ruler')}${rb('home', 'Home view')}${rb('filters', 'Filters')}${rb('share', 'Share')}</div>
   <div class="dock"><form id="search">${ico('search')}<input name="q" type="search" list="nos" placeholder="Search plot no." aria-label="Search plot number">
       <datalist id="nos">${plots().map(x => `<option value="${esc(x.no)}">`).join('')}</datalist></form>
     ${pb('gps', 'GPS')}${pb('gallery', 'Gallery')}${pb('info', 'Info')}
@@ -447,6 +453,8 @@ function renderMap(p, edit, params) {
     ovhide() { p.overlay.hidden = !p.overlay.hidden; save(); drawOverlay(); overlayPanel(); },
     ovdel() { if (confirm('Remove the tracing overlay? Shapes you have drawn stay.')) { delete p.overlay; save(); drawOverlay(); overlayPanel(); } },
     home() { map.setView(p.center, p.zoom); },
+    zin() { map.zoomIn(); },
+    zout() { map.zoomOut(); },
     ruler() { hide(); setMode(mode === 'ruler' ? null : 'ruler'); },
     filters, share,
     resetf() { range.min = 0; range.max = Infinity; Object.keys(STATUS).forEach(k => shown.add(k)); draw(); filters(); },
