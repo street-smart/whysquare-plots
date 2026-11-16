@@ -82,10 +82,9 @@ function seed() {
 
 let db;
 try { db = JSON.parse(localStorage.getItem(KEY)); } catch {}
-// a browser with no saved projects starts from data/projects.json (the shared projects), else the built-in demo
-// a browser holding only the built-in demo (saved before the shared data existed) also counts as fresh
-const onlyDemo = d => d.workspaces.length === 1 && d.workspaces[0].projects.length === 1 && d.workspaces[0].projects[0].id === 'demo';
-const firstLoad = !Array.isArray(db?.workspaces) || onlyDemo(db);
+// Shared projects live in data/projects.json. A browser takes them when it has nothing saved, or when the
+// file's "version" is newer than the one it last took. Bump "version" in the file to publish new data to everyone.
+const hasData = d => Array.isArray(d?.workspaces);
 const save = () => {
   try { localStorage.setItem(KEY, JSON.stringify(db)); }
   catch { alert('Could not save: this browser\'s storage is full. Export a backup, then remove a logo or some plots.'); }
@@ -544,11 +543,12 @@ function renderMap(p, edit, params) {
 }
 
 (async () => {
-  if (firstLoad) {
-    db = null;
-    try { const r = await fetch('data/projects.json', { cache: 'no-store' }); if (r.ok) db = await r.json(); } catch {}
-    if (!Array.isArray(db?.workspaces)) db = seed(); // file missing or unreadable: fall back to the demo
-    save();
-  }
+  let shared = null;
+  try { const r = await fetch('data/projects.json', { cache: 'no-store' }); if (r.ok) shared = await r.json(); } catch {}
+  if (hasData(shared) && (!hasData(db) || (shared.version || 0) > (db.version || 0))) {
+    if (hasData(db)) try { localStorage.setItem(KEY + '-previous', JSON.stringify(db)); } catch {} // keep this browser's old copy, never silently lose edits
+    db = shared;
+  } else if (!hasData(db)) db = seed(); // no file and nothing saved: the built-in demo
+  save();
   route();
 })();
