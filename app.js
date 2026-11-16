@@ -83,7 +83,9 @@ function seed() {
 let db;
 try { db = JSON.parse(localStorage.getItem(KEY)); } catch {}
 // a browser with no saved projects starts from data/projects.json (the shared projects), else the built-in demo
-const firstLoad = !Array.isArray(db?.workspaces);
+// a browser holding only the built-in demo (saved before the shared data existed) also counts as fresh
+const onlyDemo = d => d.workspaces.length === 1 && d.workspaces[0].projects.length === 1 && d.workspaces[0].projects[0].id === 'demo';
+const firstLoad = !Array.isArray(db?.workspaces) || onlyDemo(db);
 const save = () => {
   try { localStorage.setItem(KEY, JSON.stringify(db)); }
   catch { alert('Could not save: this browser\'s storage is full. Export a backup, then remove a logo or some plots.'); }
