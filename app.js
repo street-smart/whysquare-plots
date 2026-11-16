@@ -1,7 +1,7 @@
 // shortcut: all data lives in this browser's localStorage, move to a backend with logins when other people must see or edit projects
 const KEY = 'whysquare-plots-v1';
 const STATUS = { available: ['Available', '#7bd66b'], reserved: ['Reserved', '#f2b33d'], sold: ['Sold', '#e5604d'] };
-const KINDS = { plot: ['Plot'], road: ['Road', '#3a3e3c'], green: ['Green area', '#5f8f3e'], amenity: ['Amenity', '#6b7f9c'] };
+const KINDS = { plot: ['Plot'], road: ['Road', '#3a3e3c'], green: ['Green area', '#4a6630'], amenity: ['Amenity', '#6b7f9c'] };
 // unit: [area label, sq m to unit, length label, m to unit]
 const UNITS = { sqft: ['sq ft', 10.7639, 'ft', 3.28084], sqyd: ['sq yd', 1.19599, 'ft', 3.28084], sqm: ['sq m', 1, 'm', 1] };
 const app = document.getElementById('app');
@@ -152,7 +152,8 @@ function renderMap(p, edit, params) {
   <div class="badge"><img src="whysquare_logo.png" alt="Whysquare"><small>Automate. Innovate. Elevate</small></div>`;
 
   map = L.map('map', { zoomControl: false, doubleClickZoom: false }).setView(p.center, p.zoom);
-  const tiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxNativeZoom: 18, maxZoom: 21, attribution: 'Imagery &copy; Esri' }).addTo(map);
+  const tiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxNativeZoom: 18, maxZoom: 21, attribution: 'Imagery &copy;2026 Esri, Maxar, Earthstar Geographics, GIS User Community | <a href="https://www.esri.com/en-us/legal/terms/full-master-agreement" target="_blank" rel="noopener">Terms</a>' }).addTo(map);
+  map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>'); // drop the default flag icon
   const splash = $('.splash'); // loading screen: goes once the imagery is in, or after 3s on a slow connection
   if (splash) { const done = () => { splash.classList.add('gone'); setTimeout(() => splash.remove(), 400); }; tiles.once('load', done); setTimeout(done, 3000); }
   const layer = L.layerGroup().addTo(map);
