@@ -35,6 +35,35 @@ function area(pts) {
 }
 console.assert(Math.abs(area([[0, 0], [0, .001], [.001, .001], [.001, 0]]) - 111.32 * 110.54) < 1, 'area() self-check failed');
 
+// CAD export: DXF R12 (opens in AutoCAD, LibreCAD, QGIS, BricsCAD). Units are metres east and north of the project's home point.
+// One layer per shape type, plot numbers as centred text on LABELS.
+function toDXF(p) {
+  const kx = Math.cos(p.center[0] * Math.PI / 180) * 111320, ky = 110540;
+  const xy = ([la, ln]) => [(ln - p.center[1]) * kx, (la - p.center[0]) * ky];
+  const layer = s => (KINDS[s.kind] && s.kind !== 'plot' ? s.kind : 'plot').toUpperCase();
+  const out = [], put = (...v) => out.push(...v.map(String));
+  const text = (x, y, h, s) => put(0, 'TEXT', 8, 'LABELS', 10, x.toFixed(3), 20, y.toFixed(3), 40, h.toFixed(2), 1, s, 72, 1, 11, x.toFixed(3), 21, y.toFixed(3), 73, 2);
+  put(0, 'SECTION', 2, 'HEADER', 9, '$ACADVER', 1, 'AC1009', 0, 'ENDSEC');
+  put(0, 'SECTION', 2, 'TABLES', 0, 'TABLE', 2, 'LAYER', 70, 5);
+  for (const [name, colour] of [['PLOT', 7], ['ROAD', 8], ['GREEN', 3], ['AMENITY', 5], ['LABELS', 2]]) put(0, 'LAYER', 2, name, 70, 0, 62, colour, 6, 'CONTINUOUS');
+  put(0, 'ENDTAB', 0, 'ENDSEC', 0, 'SECTION', 2, 'ENTITIES');
+  let minX = Infinity, minY = Infinity;
+  for (const s of p.plots) {
+    const P = s.pts.map(xy), ly = layer(s);
+    put(0, 'POLYLINE', 8, ly, 66, 1, 70, 1); // closed polyline
+    for (const [x, y] of P) { put(0, 'VERTEX', 8, ly, 10, x.toFixed(3), 20, y.toFixed(3)); minX = Math.min(minX, x); minY = Math.min(minY, y); }
+    put(0, 'SEQEND', 8, ly);
+    if (s.no) text(P.reduce((t, q) => t + q[0], 0) / P.length, P.reduce((t, q) => t + q[1], 0) / P.length, Math.min(8, Math.max(1, Math.sqrt(area(s.pts)) / 6)), s.no);
+  }
+  if (p.plots.length) text(minX, minY - 12, 4, `${p.name} - traced from satellite imagery, not a survey drawing`);
+  put(0, 'ENDSEC', 0, 'EOF');
+  return out.join('\r\n') + '\r\n';
+}
+{ // self-check: one square plot gives one closed polyline with 4 vertices and a label
+  const d = toDXF({ name: 't', center: [0, 0], plots: [{ kind: 'plot', no: '1', pts: [[0, 0], [0, .001], [.001, .001], [.001, 0]] }] });
+  console.assert(d.split('\r\nVERTEX\r\n').length === 5 && d.includes('\r\nTEXT\r\n') && d.endsWith('EOF\r\n'), 'toDXF() self-check failed');
+}
+
 function seed() {
   const c = [18.6105, 73.912], rot = .35, dx = .00042, dy = .0003, plots = [];
   const rect = (x0, y0, w, h) => [[0, 0], [w, 0], [w, h], [0, h]].map(([x, y]) => {
@@ -139,7 +168,7 @@ function renderMap(p, edit, params) {
     ${p.logo ? `<img src="${esc(p.logo)}" alt="${esc(p.name)}">` : `<div><b>${esc(p.name)}</b><small>${esc(p.tagline)}</small></div>`}
     ${viewOnly ? '' : `<a class="pill ${edit ? 'primary' : ''}" href="#/p/${p.id}${edit ? '' : '/edit'}">${edit ? 'Done' : ico('edit') + 'Edit'}</a>`}</header>
   ${edit ? `<div class="editbar">${b('draw', '+ Draw shape')}<button class="primary" data-a="finish">Finish shape</button>${b('cancel', 'Cancel')}
-    ${b('overlay', 'Tracing overlay')}${b('settings', 'Project settings')}${b('sethome', 'Set home view')}
+    ${b('overlay', 'Tracing overlay')}${b('settings', 'Project settings')}${b('sethome', 'Set home view')}${b('cad', 'Export CAD')}
     <form id="goto"><input name="ll" placeholder="lat, lng" aria-label="Go to latitude, longitude"><button>Go</button></form></div>` : ''}
   <div class="tools">${rb('ruler', 'Ruler')}${rb('home', 'Home view')}${rb('filters', 'Filters')}${rb('share', 'Share')}</div>
   <div class="dock"><form id="search">${ico('search')}<input name="q" type="search" list="nos" placeholder="Search plot no." aria-label="Search plot number">
@@ -443,6 +472,12 @@ function renderMap(p, edit, params) {
         ${field('Photo links, one per line', 'sf="gallery"', p.gallery.join('\n'), 'textarea')}`);
     },
     rmlogo() { delete p.logo; save(); route(); },
+    cad() {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([toDXF(p)], { type: 'application/dxf' }));
+      a.download = `${p.name.replace(/[^\w]+/g, '-').toLowerCase()}-layout-metres.dxf`;
+      a.click();
+    },
   };
   app.onclick = e => { const a = e.target.closest('[data-a]'); if (a && act[a.dataset.a]) act[a.dataset.a](a); };
   app.oninput = e => {
