@@ -82,7 +82,8 @@ function seed() {
 
 let db;
 try { db = JSON.parse(localStorage.getItem(KEY)); } catch {}
-if (!Array.isArray(db?.workspaces)) db = seed();
+// a browser with no saved projects starts from data/projects.json (the shared projects), else the built-in demo
+const firstLoad = !Array.isArray(db?.workspaces);
 const save = () => {
   try { localStorage.setItem(KEY, JSON.stringify(db)); }
   catch { alert('Could not save: this browser\'s storage is full. Export a backup, then remove a logo or some plots.'); }
@@ -105,7 +106,7 @@ function route() {
   if (p) renderMap(p, !!m[2], new URLSearchParams(qs));
   else renderDash((path.match(/^\/w\/(\w+)$/) || [])[1]);
 }
-window.addEventListener('hashchange', route);
+window.addEventListener('hashchange', () => db && route());
 
 function renderDash(wid) {
   const w = db.workspaces.find(x => x.id === wid) || db.workspaces[0];
@@ -540,4 +541,12 @@ function renderMap(p, edit, params) {
   drawOverlay();
 }
 
-route();
+(async () => {
+  if (firstLoad) {
+    db = null;
+    try { const r = await fetch('data/projects.json', { cache: 'no-store' }); if (r.ok) db = await r.json(); } catch {}
+    if (!Array.isArray(db?.workspaces)) db = seed(); // file missing or unreadable: fall back to the demo
+    save();
+  }
+  route();
+})();
