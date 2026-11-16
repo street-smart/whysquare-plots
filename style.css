@@ -110,12 +110,14 @@ path.leaflet-interactive:hover { filter: brightness(1.12); }
 [data-mode=draw] #map, [data-mode=ruler] #map, [data-mode=match] #map { cursor: crosshair; }
 
 #panel { left: 16px; bottom: 28px; width: 330px; max-height: calc(100% - 190px); overflow: hidden auto; display: flex; flex-direction: column; gap: 12px; padding: 20px; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--line); border-radius: 6px; }
-#panel[hidden] { display: none; }
+#panel { margin: 0; right: auto; top: auto; max-width: none; color: var(--cream); } /* undo the browser's centred dialog defaults */
+#panel:not([open]) { display: none; }
 #panel { animation: rise .18s ease-out; }
 #panel .x { position: absolute; top: 8px; right: 8px; width: 36px; min-height: 36px; padding: 0; border-color: transparent; }
 #panel h3 { font-size: 21px; padding-right: 36px; }
 #panel.tl { top: 84px; bottom: auto; }
-#panel.modal { left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%); width: min(480px, calc(100% - 32px)); max-height: calc(100% - 64px); padding: 28px; box-shadow: 0 0 0 100vmax rgba(5, 10, 16, .66); }
+#panel.modal { inset: 0; margin: auto; height: fit-content; width: min(480px, calc(100% - 32px)); max-height: calc(100% - 64px); padding: 28px; overscroll-behavior: contain; }
+#panel::backdrop { background: rgba(5, 10, 16, .66); overflow: hidden; overscroll-behavior: contain; }
 #panel.modal.wide { width: min(920px, calc(100% - 32px)); }
 #panel.modal > img { max-width: 240px; max-height: 80px; object-fit: contain; align-self: flex-start; }
 .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
@@ -161,8 +163,8 @@ dd { margin: 0; }
   .dock { left: 16px; right: 16px; width: auto; bottom: 20px; }
   .tools { top: auto; bottom: 150px; transform: none; }
   /* panels become a bottom sheet in thumb reach, and replace the dock while open */
-  #panel, #panel.tl, #panel.modal, #panel.modal.wide { left: 0; right: 0; top: auto; bottom: 0; transform: none; width: auto; max-height: 62%; padding: 20px; border-width: 1px 0 0; border-radius: 16px 16px 0 0; }
+  #panel, #panel.tl, #panel.modal, #panel.modal.wide { left: 0; right: 0; top: auto; bottom: 0; margin: 0; width: auto; max-height: 62%; padding: 20px; border-width: 1px 0 0; border-radius: 16px 16px 0 0; }
   #panel.slip { border: 0; padding-top: 26px; }
-  .viewer:has(#panel:not([hidden])) :is(.dock, .tools) { display: none; }
+  .viewer:has(#panel[open]) :is(.dock, .tools) { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

@@ -146,7 +146,7 @@ function renderMap(p, edit, params) {
       <datalist id="nos">${plots().map(x => `<option value="${esc(x.no)}">`).join('')}</datalist></form>
     ${pb('gps', 'GPS')}${pb('gallery', 'Gallery')}${pb('info', 'Info')}
     <a class="pill" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${p.center[0]},${p.center[1]}">${ico('locate')}Locate</a></div>
-  <section id="panel" hidden></section><div id="tip" hidden></div><div id="snap" hidden></div>
+  <dialog id="panel" aria-labelledby="panel-title"></dialog><div id="tip" hidden></div><div id="snap" hidden></div>
   ${edit ? '' : `<div class="splash">${p.logo ? `<img class="mine" src="${esc(p.logo)}" alt="">` : `<h2>${esc(p.name)}</h2>`}
     <div><img src="whysquare_logo.png" alt=""><b>Whysquare</b><small>Automate. Innovate. Elevate</small></div><p>Tip: tap a plot to see its size and sides.</p></div>`}
   <div class="badge"><img src="whysquare_logo.png" alt="Whysquare"><small>Automate. Innovate. Elevate</small></div>`;
@@ -164,16 +164,27 @@ function renderMap(p, edit, params) {
   const match = pl => (!showStatus || shown.has(pl.status)) && (+pl.area || 0) >= range.min && (+pl.area || 0) <= range.max;
 
   // kind: '' side card, 'slip' plot card, 'tl' top-left card, 'modal' centred over a dimmed map
-  const show = (html, kind = '') => { panel.className = kind; panel.innerHTML = `<button class="x" data-a="close" aria-label="Close">${ico('close')}</button>${html}`; panel.hidden = false; };
-  const hide = () => { panel.hidden = true; };
+  // Native <dialog>: Share, Info and Gallery open modal (page inert, Esc and click-outside close, focus returns);
+  // every other panel opens non-modal, because the ruler, matching and drawing need map clicks while it is open.
+  const show = (html, kind = '') => {
+    const modal = /\bmodal\b/.test(kind);
+    if (panel.open && panel.matches(':modal') !== modal) panel.close(); // a dialog can't switch between modal and non-modal while open
+    panel.className = kind;
+    panel.innerHTML = `<button class="x" data-a="close" aria-label="Close">${ico('close')}</button>${html}`;
+    panel.querySelector('h3')?.setAttribute('id', 'panel-title');
+    modal ? panel.setAttribute('closedby', 'any') : panel.removeAttribute('closedby'); // closedby also applies to show(), so only while modal
+    if (!panel.open) modal ? panel.showModal() : panel.show();
+  };
+  const hide = () => { if (panel.open) panel.close(); };
   const marks = L.layerGroup().addTo(map); // ruler dots, segments and their lengths
   const band = L.polyline([], { color: '#fff', weight: 1.5, dashArray: '6 6', interactive: false }).addTo(map); // follows the cursor
   const tip = $('#tip'), mark = $('#snap');
-  let run = 0;
-  const setMode = m => { mode = m; pts = []; run = 0; temp.setLatLngs([]); band.setLatLngs([]); marks.clearLayers(); tip.hidden = mark.hidden = true; app.dataset.mode = m || ''; };
+  let run = 0, closed = false; // closed: the ruler loop was finished, so the next click starts a new measurement
+  const setMode = m => { mode = m; pts = []; run = 0; closed = false; temp.setLatLngs([]); band.setLatLngs([]); marks.clearLayers(); tip.hidden = mark.hidden = true; app.dataset.mode = m || ''; };
   // Ruler and drawing snap to the nearest shape corner within 12px, else the nearest edge within 8px
   function snap(e) {
     const c = e.containerPoint || map.latLngToContainerPoint(e.latlng);
+    if (pts.length > 2 && !closed && map.latLngToContainerPoint(pts[0]).distanceTo(c) < 12) return { ll: pts[0], kind: 'corner', close: true }; // back at the start: close the loop
     let best = null, bd = 12;
     for (const s of p.plots) for (const v of s.pts) { const d = map.latLngToContainerPoint(v).distanceTo(c); if (d < bd) { bd = d; best = v; } }
     if (best) return { ll: best, kind: 'corner' };
@@ -261,8 +272,15 @@ function renderMap(p, edit, params) {
     try {
       let src;
       if (file.type === 'application/pdf') {
-        if (!window.pdfjsLib) await new Promise((ok, no) => { const s = document.createElement('script'); s.src = PDFJS + 'pdf.min.js'; s.onload = ok; s.onerror = no; document.head.append(s); });
-        pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js';
+        // pinned files with cdnjs's published hashes, so a tampered copy is refused
+        if (!window.pdfjsLib) await new Promise((ok, no) => {
+          const s = Object.assign(document.createElement('script'), { src: PDFJS + 'pdf.min.js', crossOrigin: 'anonymous', referrerPolicy: 'no-referrer', integrity: 'sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ==', onload: ok, onerror: no });
+          document.head.append(s);
+        });
+        if (!pdfjsLib.GlobalWorkerOptions.workerSrc.startsWith('blob:')) { // the worker is loaded by URL inside pdf.js, so fetch it checked and hand over a local copy
+          const r = await fetch(PDFJS + 'pdf.worker.min.js', { integrity: 'sha512-BbrZ76UNZq5BhH7LL7pn9A4TKQpQeNCHOo65/akfelcIBbcVvYWOFQKPXIrykE3qZxYjmDX573oa4Ywsc7rpTw==', mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' });
+          pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(await r.blob());
+        }
         const doc = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
         pdf = { file, pages: doc.numPages, page: Math.min(Math.max(1, Math.round(pageNo) || 1), doc.numPages) };
         const page = await doc.getPage(pdf.page);
@@ -359,8 +377,17 @@ function renderMap(p, edit, params) {
     if (mode === 'overlay') return;
     if (mode === 'match') return matchClick([e.latlng.lat, e.latlng.lng]);
     if (!mode) { sel = null; draw(); hide(); return; }
-    const a = pts.at(-1), c = snap(e).ll;
-    pts.push(c); band.setLatLngs([]);
+    if (closed) { marks.clearLayers(); pts = []; run = 0; closed = false; hide(); } // a finished loop: this click starts a new measurement
+    const s = snap(e), a = pts.at(-1), c = s.ll;
+    band.setLatLngs([]);
+    if (s.close && mode === 'draw') return act.finish(); // clicking the first corner again finishes the shape
+    if (s.close) { // ruler loop closed: add the last side, then stop and show perimeter and area
+      const d = map.distance(a, c); run += d; closed = true; tip.hidden = mark.hidden = true;
+      L.polyline([a, c], { color: '#fff', weight: 2.5, interactive: false }).addTo(marks);
+      L.marker([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2], { interactive: false, icon: L.divIcon({ className: 'dim', html: `<span style="transform:translate(-50%,-50%) rotate(${angle(a, c).toFixed(1)}deg)">${fmtLen(d)}</span>`, iconSize: [0, 0] }) }).addTo(marks);
+      return show(`<h3>Measurement</h3><div><p class="big">${fmtLen(run)}</p><small>around the loop</small></div><div><p class="big">${fmtArea(area(pts))}</p><small>inside the loop</small></div><p><small>Click the map to start a new measurement.</small></p>`);
+    }
+    pts.push(c);
     if (mode !== 'ruler') return temp.setLatLngs(pts);
     L.circleMarker(c, { radius: 5, color: '#fff', fillColor: '#fff', fillOpacity: 1, interactive: false }).addTo(marks);
     if (!a) return;
@@ -369,7 +396,7 @@ function renderMap(p, edit, params) {
     L.marker([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2], { interactive: false, icon: L.divIcon({ className: 'dim', html: `<span style="transform:translate(-50%,-50%) rotate(${angle(a, c).toFixed(1)}deg)">${fmtLen(d)}</span>`, iconSize: [0, 0] }) }).addTo(marks);
   });
   map.on('mousemove', e => { // snap marker, dashed line from the last point, and the running total beside the cursor
-    if (mode !== 'ruler' && mode !== 'draw') return;
+    if ((mode !== 'ruler' && mode !== 'draw') || closed) return;
     const s = snap(e), at = map.latLngToContainerPoint(s.ll);
     mark.hidden = !s.kind; mark.className = s.kind || ''; mark.style.transform = `translate(${at.x}px, ${at.y}px)`;
     if (!pts.length) return;
