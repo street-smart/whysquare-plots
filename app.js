@@ -1,5 +1,7 @@
 // shortcut: all data lives in this browser's localStorage, move to a backend with logins when other people must see or edit projects
 const KEY = 'whysquare-plots-v1';
+// Google Maps JavaScript API key. Restrict it to this site's web address in Google Cloud. Empty = development mode (watermarked map).
+const GMAPS_KEY = '';
 const STATUS = { available: ['Available', '#7bd66b'], reserved: ['Reserved', '#f2b33d'], sold: ['Sold', '#e5604d'] };
 const KINDS = { plot: ['Plot'], road: ['Road', '#3a3e3c'], green: ['Green area', '#4a6630'], amenity: ['Amenity', '#6b7f9c'] };
 // unit: [area label, sq m to unit, length label, m to unit]
@@ -95,7 +97,7 @@ let map = null, onEsc = null;
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && onEsc) onEsc(); });
 
 function route() {
-  if (map) { map.stop(); map.remove(); map = null; } // stop() first: removing mid-zoom throws inside Leaflet
+  map = null; // the Google map goes away with its #map element
   onEsc = null;
   app.oninput = app.onsubmit = app.onchange = null;
   const [path, qs] = location.hash.slice(1).split('?');
@@ -188,14 +190,50 @@ function renderMap(p, edit, params) {
     <div><img src="whysquare_logo.png" alt=""><b>Whysquare</b><small>Automate. Innovate. Elevate</small></div><p>Tip: tap a plot to see its size and sides.</p></div>`}
   <div class="badge"><img src="whysquare_logo.png" alt="Whysquare"><small>Automate. Innovate. Elevate</small></div>`;
 
-  map = L.map('map', { zoomControl: false, doubleClickZoom: false }).setView(p.center, p.zoom);
-  // Google satellite with labels (lyrs=y). shortcut: direct tile URLs, no API key; move to the Google Maps Tiles API if usage grows
-  const tiles = L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { subdomains: '0123', maxNativeZoom: 20, maxZoom: 21, attribution: 'Map data &copy;2026 Google | <a href="https://www.google.com/intl/en_in/help/terms_maps/" target="_blank" rel="noopener">Terms</a>' }).addTo(map);
-  map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>'); // drop the default flag icon
+  if (!window.google?.maps) { $('#map').innerHTML = '<p class="nomap">The map could not load. Check your connection and reload the page.</p>'; return; }
+  const G = google.maps, LL = a => ({ lat: a[0], lng: a[1] }), ll2 = l => [l.lat(), l.lng()];
+  map = new G.Map($('#map'), { center: LL(p.center), zoom: p.zoom, mapTypeId: 'hybrid', tilt: 0, maxZoom: 21, disableDefaultUI: true, disableDoubleClickZoom: true, clickableIcons: false, gestureHandling: 'greedy', backgroundColor: '#0b1016' });
   const splash = $('.splash'); // loading screen: goes once the imagery is in, or after 3s on a slow connection
-  if (splash) { const done = () => { splash.classList.add('gone'); setTimeout(() => splash.remove(), 400); }; tiles.once('load', done); setTimeout(done, 3000); }
-  const layer = L.layerGroup().addTo(map);
-  const temp = L.polyline([], { color: '#fff', dashArray: '6 6' }).addTo(map);
+  if (splash) { const done = () => { splash.classList.add('gone'); setTimeout(() => splash.remove(), 400); }; G.event.addListenerOnce(map, 'tilesloaded', done); setTimeout(done, 3000); }
+
+  // One OverlayView does the screen <-> lat/lng maths and holds the HTML on the map: plot numbers, side lengths, ruler
+  // dots, the imagery dimmer and the tracing drawing. Shapes and lines are native Google polygons and polylines.
+  class View extends G.OverlayView {
+    items = []; box = Object.assign(document.createElement('div'), { className: 'gl' }); shade = Object.assign(document.createElement('div'), { className: 'gshade' }); svg = null;
+    onAdd() { const pn = this.getPanes(); pn.mapPane.append(this.shade); pn.floatPane.append(this.box); if (this.svg) pn.overlayMouseTarget.append(this.svg); draw(); }
+    place(el, ll) { const q = this.getProjection()?.fromLatLngToDivPixel(LL(ll)); if (q) el.style.transform = `translate(${q.x}px, ${q.y}px)`; }
+    draw() {
+      const pr = this.getProjection(), m = $('#map'); if (!pr || !m) return;
+      this.items.forEach(it => this.place(it.el, it.ll));
+      const o = pr.fromLatLngToDivPixel(pr.fromContainerPixelToLatLng(new G.Point(-200, -200))); // dimmer covers the view with a margin for panning
+      Object.assign(this.shade.style, { left: o.x + 'px', top: o.y + 'px', width: m.clientWidth + 400 + 'px', height: m.clientHeight + 400 + 'px' });
+      if (this.svg) {
+        const [[s, w], [n, e]] = ovBounds(p.overlay), a = pr.fromLatLngToDivPixel(LL([n, w])), c = pr.fromLatLngToDivPixel(LL([s, e]));
+        Object.assign(this.svg.style, { left: a.x + 'px', top: a.y + 'px', width: c.x - a.x + 'px', height: c.y - a.y + 'px' });
+      }
+    }
+  }
+  const view = new View(); view.setMap(map);
+  const px = ll => view.getProjection().fromLatLngToContainerPixel(LL(ll)); // lat/lng -> pixel in the map box
+  const toLL = q => ll2(view.getProjection().fromContainerPixelToLatLng(new G.Point(q.x, q.y)));
+  const pd = (a, c) => Math.hypot(a.x - c.x, a.y - c.y);
+  const dist = (a, c) => { const r = Math.PI / 180, h = Math.sin((c[0] - a[0]) * r / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(c[0] * r) * Math.sin((c[1] - a[1]) * r / 2) ** 2; return 12742000 * Math.asin(Math.sqrt(h)); };
+  const closest = (c, a, b) => { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy, t = l2 ? Math.max(0, Math.min(1, ((c.x - a.x) * dx + (c.y - a.y) * dy) / l2)) : 0; return { x: a.x + t * dx, y: a.y + t * dy }; };
+  const centroid = v => { let A = 0, x = 0, y = 0; v.forEach((a, i) => { const c = v[(i + 1) % v.length], k = a[0] * c[1] - c[0] * a[1]; A += k; x += (a[0] + c[0]) * k; y += (a[1] + c[1]) * k; }); return A ? [x / 3 / A, y / 3 / A] : v[0]; };
+  const fit = v => { const bb = new G.LatLngBounds(); v.forEach(q => bb.extend(LL(q))); map.fitBounds(bb, 140); G.event.addListenerOnce(map, 'idle', () => map.getZoom() > 19 && map.setZoom(19)); };
+  const dash = (color, gap) => ({ strokeOpacity: 0, icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeColor: color, strokeWeight: 1.5, scale: 2 }, offset: '0', repeat: gap }] });
+  const line = (v, o) => new G.Polyline({ path: v.map(LL), clickable: false, ...o });
+  const group = () => { // shapes and labels that are cleared together
+    const objs = [], els = new Set();
+    return {
+      add(o) { o.setMap(map); objs.push(o); return o; },
+      label(ll, html, cls = '') { const el = Object.assign(document.createElement('div'), { className: cls, innerHTML: html }); view.items.push({ ll, el }); els.add(el); view.box.append(el); view.place(el, ll); },
+      clear() { objs.splice(0).forEach(o => o.setMap(null)); els.forEach(el => el.remove()); view.items = view.items.filter(it => !els.has(it.el)); els.clear(); },
+    };
+  };
+  const dot = (ll, fill) => marks.label(ll, `<i class="dot" style="background:${fill}"></i>`);
+  const layer = group(), here = group();
+  const temp = line([], dash('#fff', '12px')); temp.setMap(map);
   const panel = $('#panel');
   const shown = new Set(Object.keys(STATUS));
   const range = { min: 0, max: Infinity };
@@ -215,63 +253,60 @@ function renderMap(p, edit, params) {
     if (!panel.open) modal ? panel.showModal() : panel.show();
   };
   const hide = () => { if (panel.open) panel.close(); };
-  const marks = L.layerGroup().addTo(map); // ruler dots, segments and their lengths
-  const band = L.polyline([], { color: '#fff', weight: 1.5, dashArray: '6 6', interactive: false }).addTo(map); // follows the cursor
+  const marks = group(); // ruler dots, segments and their lengths
+  const band = line([], dash('#fff', '12px')); band.setMap(map); // follows the cursor
   const tip = $('#tip'), mark = $('#snap');
   let run = 0, closed = false; // closed: the ruler loop was finished, so the next click starts a new measurement
-  const setMode = m => { mode = m; pts = []; run = 0; closed = false; temp.setLatLngs([]); band.setLatLngs([]); marks.clearLayers(); tip.hidden = mark.hidden = true; app.dataset.mode = m || ''; };
-  // Ruler and drawing snap to the nearest shape corner within 12px, else the nearest edge within 8px
-  function snap(e) {
-    const c = e.containerPoint || map.latLngToContainerPoint(e.latlng);
-    if (pts.length > 2 && !closed && map.latLngToContainerPoint(pts[0]).distanceTo(c) < 12) return { ll: pts[0], kind: 'corner', close: true }; // back at the start: close the loop
+  const setMode = m => { mode = m; pts = []; run = 0; closed = false; temp.setPath([]); band.setPath([]); marks.clear(); tip.hidden = mark.hidden = true; app.dataset.mode = m || ''; };
+  // Ruler and drawing snap to the nearest shape corner within 12px, else the nearest edge within 8px. c: cursor pixel.
+  function snap(ll, c) {
+    if (pts.length > 2 && !closed && pd(px(pts[0]), c) < 12) return { ll: pts[0], kind: 'corner', close: true }; // back at the start: close the loop
     let best = null, bd = 12;
-    for (const s of p.plots) for (const v of s.pts) { const d = map.latLngToContainerPoint(v).distanceTo(c); if (d < bd) { bd = d; best = v; } }
+    for (const s of p.plots) for (const v of s.pts) { const d = pd(px(v), c); if (d < bd) { bd = d; best = v; } }
     if (best) return { ll: best, kind: 'corner' };
     bd = 8;
     for (const s of p.plots) s.pts.forEach((a, i) => {
-      const q = L.LineUtil.closestPointOnSegment(c, map.latLngToContainerPoint(a), map.latLngToContainerPoint(s.pts[(i + 1) % s.pts.length])), d = q.distanceTo(c);
+      const q = closest(c, px(a), px(s.pts[(i + 1) % s.pts.length])), d = pd(q, c);
       if (d < bd) { bd = d; best = q; }
     });
-    if (!best) return { ll: [e.latlng.lat, e.latlng.lng] };
-    const ll = map.containerPointToLatLng(best);
-    return { ll: [ll.lat, ll.lng], kind: 'edge' };
+    return best ? { ll: toLL(best), kind: 'edge' } : { ll };
   }
   // Screen angle of a side, kept upright so text along it never reads upside down
   const angle = (a, c) => {
-    const pa = map.latLngToContainerPoint(a), pc = map.latLngToContainerPoint(c);
+    if (!view.getProjection()) return 0;
+    const pa = px(a), pc = px(c);
     const d = Math.atan2(pc.y - pa.y, pc.x - pa.x) * 180 / Math.PI;
     return d > 90 ? d - 180 : d < -90 ? d + 180 : d;
   };
   setMode(null);
   onEsc = () => { setMode(null); hide(); };
 
-  // Tracing overlay: a layout drawing laid on the map, editor only. Sits under the plots.
-  map.createPane('trace').style.zIndex = 350;
-  let ov = null;
+  // Tracing overlay: a layout drawing laid on the map, editor only
   const ovBounds = o => {
     const half = o.width * Math.hypot(o.w, o.h) / o.w / 2; // half side, in metres, of the square that holds the drawing at any rotation
     const dLat = half / 110540, dLng = half / (111320 * Math.cos(o.center[0] * Math.PI / 180));
     return [[o.center[0] - dLat, o.center[1] - dLng], [o.center[0] + dLat, o.center[1] + dLng]];
   };
   function drawOverlay() {
-    if (ov) { ov.remove(); ov = null; }
+    view.svg?.remove(); view.svg = null;
     const o = p.overlay;
     if (!edit || !o || o.hidden) return;
     const NS = 'http://www.w3.org/2000/svg', D = Math.hypot(o.w, o.h);
     const svg = document.createElementNS(NS, 'svg'), img = document.createElementNS(NS, 'image');
-    svg.setAttribute('viewBox', `0 0 ${D} ${D}`);
+    svg.setAttribute('viewBox', `0 0 ${D} ${D}`); svg.setAttribute('class', 'ov'); svg.style.opacity = o.opacity;
     Object.entries({ href: o.src, x: (D - o.w) / 2, y: (D - o.h) / 2, width: o.w, height: o.h, transform: `rotate(${+o.rot || 0} ${D / 2} ${D / 2})` }).forEach(([k, v]) => img.setAttribute(k, v));
     svg.append(img);
-    ov = L.svgOverlay(svg, ovBounds(o), { pane: 'trace', opacity: o.opacity, className: 'ov' }).addTo(map);
+    view.svg = svg; view.getPanes()?.overlayMouseTarget.append(svg); view.draw();
+    G.OverlayView.preventMapHitsAndGesturesFrom(svg); // drags on the drawing move it, not the map
+    const evLL = e => { const r = $('#map').getBoundingClientRect(); return toLL({ x: e.clientX - r.left, y: e.clientY - r.top }); };
     let last = null; // drag the drawing to move it, only while the overlay panel is open
-    img.onmousedown = e => { if (mode === 'overlay') e.stopPropagation(); };
-    img.onpointerdown = e => { if (mode !== 'overlay') return; img.setPointerCapture(e.pointerId); last = map.mouseEventToLatLng(e); map.dragging.disable(); };
+    img.onpointerdown = e => { if (mode !== 'overlay') return; e.stopPropagation(); img.setPointerCapture(e.pointerId); last = evLL(e); map.setOptions({ gestureHandling: 'none' }); };
     img.onpointermove = e => {
       if (!last) return;
-      const ll = map.mouseEventToLatLng(e);
-      o.center = [o.center[0] + ll.lat - last.lat, o.center[1] + ll.lng - last.lng]; last = ll; ov.setBounds(ovBounds(o));
+      const ll = evLL(e);
+      o.center = [o.center[0] + ll[0] - last[0], o.center[1] + ll[1] - last[1]]; last = ll; view.draw();
     };
-    img.onpointerup = img.onpointercancel = () => { if (last) { last = null; map.dragging.enable(); save(); } };
+    img.onpointerup = img.onpointercancel = () => { if (last) { last = null; map.setOptions({ gestureHandling: 'greedy' }); save(); } };
   }
   function overlayPanel() {
     const o = p.overlay;
@@ -291,7 +326,7 @@ function renderMap(p, edit, params) {
   const matchStep = () => show(`<h3>Match two points</h3><p>Step ${pts.length + 1} of 4</p><p>${STEPS[pts.length]}</p><p><small>You can zoom and pan between clicks. Press Escape to cancel.</small></p>`);
   function matchClick(ll) {
     pts.push(ll);
-    L.circleMarker(ll, { radius: 5, color: '#fff', fillColor: pts.length % 2 ? '#f2b33d' : '#7bd66b', fillOpacity: 1, interactive: false }).addTo(marks);
+    dot(ll, pts.length % 2 ? '#f2b33d' : '#7bd66b');
     if (pts.length < 4) return matchStep();
     const o = p.overlay, kx = 111320 * Math.cos(o.center[0] * Math.PI / 180), xy = v => [(v[1] - o.center[1]) * kx, (v[0] - o.center[0]) * 110540]; // metres east and north of the drawing's centre
     const [a1, b1, a2, b2] = pts.map(xy), da = [a2[0] - a1[0], a2[1] - a1[1]], db = [b2[0] - b1[0], b2[1] - b1[1]];
@@ -331,42 +366,43 @@ function renderMap(p, edit, params) {
       const k = Math.min(1, MAX / Math.max(src.width, src.height)), c = document.createElement('canvas');
       c.width = Math.round(src.width * k); c.height = Math.round(src.height * k);
       const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(src, 0, 0, c.width, c.height);
-      const bb = map.getBounds(), ctr = map.getCenter();
-      p.overlay = { src: c.toDataURL('image/jpeg', .75), w: c.width, h: c.height, center: [ctr.lat, ctr.lng], width: Math.round(map.distance(bb.getSouthWest(), bb.getSouthEast()) / 2), rot: 0, opacity: .6 };
+      const sw = ll2(map.getBounds().getSouthWest()), ne = ll2(map.getBounds().getNorthEast());
+      p.overlay = { src: c.toDataURL('image/jpeg', .75), w: c.width, h: c.height, center: ll2(map.getCenter()), width: Math.round(dist(sw, [sw[0], ne[1]]) / 2), rot: 0, opacity: .6 };
       if (old) Object.assign(p.overlay, { center: old.center, width: old.width, rot: old.rot, opacity: old.opacity });
       save(); drawOverlay(); overlayPanel();
     } catch { show('<h3>Could not open that file</h3><p>Use a PNG, JPG or PDF. For CAD drawings, export a PDF first.</p>'); }
   }
 
   function draw() {
-    layer.clearLayers();
+    layer.clear();
     const mpp = 156543.03392 * Math.cos(p.center[0] * Math.PI / 180) / 2 ** map.getZoom(); // metres per screen pixel
     for (const pl of [...p.plots].sort((a, c) => isPlot(a) - isPlot(c))) { // roads and green areas go under plots
       const plot = isPlot(pl), on = !plot || match(pl);
       const fill = pl === sel ? '#2f86e0' : !plot ? KINDS[pl.kind][1] : showStatus ? st(pl)[1] : '#d9cfb8';
-      const poly = L.polygon(pl.pts, { color: '#1b1d1c', weight: 1, fillColor: fill, fillOpacity: on ? .9 : .2, interactive: plot || edit }).addTo(layer);
+      const poly = layer.add(new G.Polygon({ paths: pl.pts.map(LL), strokeColor: '#1b1d1c', strokeWeight: 1, fillColor: fill, fillOpacity: on ? .9 : .2, clickable: plot || edit, zIndex: plot ? 2 : 1 }));
       // labels are sized from the shape, so they grow and shrink with the map and vanish when too small to read
       const side = Math.sqrt(area(pl.pts)) / mpp, f = plot ? Math.min(side * .3, 34) : Math.min(side * .13, 14);
       if (pl.no && f >= 6.500) {
         let rot = 0, longest = 0; // road and garden names run along the shape's longest side
-        if (!plot) pl.pts.forEach((a, i) => { const c = pl.pts[(i + 1) % pl.pts.length], d = map.distance(a, c); if (d > longest) { longest = d; rot = angle(a, c); } });
-        poly.bindTooltip(`<span style="font-size:${f.toFixed(1)}px;transform:rotate(${rot.toFixed(1)}deg)">${esc(pl.no)}${pl === sel && plot && !edit ? `<small>${fmtArea(+pl.area || 0)}</small>` : ''}</span>`,
-          { permanent: true, direction: 'center', className: `no${plot ? '' : ' faint'}${pl === sel ? ' on' : ''}` });
+        if (!plot) pl.pts.forEach((a, i) => { const c = pl.pts[(i + 1) % pl.pts.length], d = dist(a, c); if (d > longest) { longest = d; rot = angle(a, c); } });
+        layer.label(centroid(pl.pts), `<div class="c"><span style="font-size:${f.toFixed(1)}px;transform:rotate(${rot.toFixed(1)}deg)">${esc(pl.no)}${pl === sel && plot && !edit ? `<small>${fmtArea(+pl.area || 0)}</small>` : ''}</span></div>`,
+          `no${plot ? '' : ' faint'}${pl === sel ? ' on' : ''}`);
       }
-      poly.on('click', e => { if (!mode) { L.DomEvent.stop(e); select(pl); } }); // while drawing, the click falls through to the map
+      poly.addListener('click', e => mode ? onClick(e) : select(pl)); // while drawing or measuring, the click goes on to the map
+      poly.addListener('mousemove', onMove);
     }
-    if (!sel) return;
+    if (!sel || !view.getProjection()) return;
     // side lengths of the selected shape: a dashed line just outside each side, with the length beyond it
-    const P = sel.pts.map(v => map.latLngToContainerPoint(v)), mid0 = P.reduce((s, q) => s.add(q), L.point(0, 0)).divideBy(P.length);
+    const P = sel.pts.map(px), mid0 = { x: P.reduce((s, q) => s + q.x, 0) / P.length, y: P.reduce((s, q) => s + q.y, 0) / P.length };
     P.forEach((a, i) => {
-      const j = (i + 1) % P.length, c = P[j], len = a.distanceTo(c);
+      const j = (i + 1) % P.length, c = P[j], len = pd(a, c);
       if (len < 34) return; // too short on screen to label
-      const mid = a.add(c).divideBy(2);
-      let n = L.point(a.y - c.y, c.x - a.x).divideBy(len);
-      if ((mid.x - mid0.x) * n.x + (mid.y - mid0.y) * n.y < 0) n = n.multiplyBy(-1); // point away from the middle of the shape
-      const out = (q, k) => map.containerPointToLatLng(q.add(n.multiplyBy(k)));
-      L.polyline([out(a, 6), out(c, 6)], { color: '#fff', weight: 1, dashArray: '3 4', interactive: false }).addTo(layer);
-      L.marker(out(mid, 16), { interactive: false, icon: L.divIcon({ className: 'dim', html: `<span style="transform:translate(-50%,-50%) rotate(${angle(sel.pts[i], sel.pts[j]).toFixed(1)}deg)">${fmtLen(map.distance(sel.pts[i], sel.pts[j]))}</span>`, iconSize: [0, 0] }) }).addTo(layer);
+      const mid = { x: (a.x + c.x) / 2, y: (a.y + c.y) / 2 };
+      let n = { x: (a.y - c.y) / len, y: (c.x - a.x) / len };
+      if ((mid.x - mid0.x) * n.x + (mid.y - mid0.y) * n.y < 0) n = { x: -n.x, y: -n.y }; // point away from the middle of the shape
+      const out = (q, k) => toLL({ x: q.x + n.x * k, y: q.y + n.y * k });
+      layer.add(line([out(a, 6), out(c, 6)], dash('#fff', '7px')));
+      layer.label(out(mid, 16), `<span style="transform:translate(-50%,-50%) rotate(${angle(sel.pts[i], sel.pts[j]).toFixed(1)}deg)">${fmtLen(dist(sel.pts[i], sel.pts[j]))}</span>`, 'dim');
     });
   }
 
@@ -386,7 +422,7 @@ function renderMap(p, edit, params) {
       ${pick('Status', 'pf="status"', Object.entries(STATUS).map(([k, [n]]) => [k, n]), pl.status)}
       ${field('Area (sq m)', 'pf="area"', pl.area)}${field('Price', 'pf="price"', pl.price)}${field('Note', 'pf="note"', pl.note, 'textarea')}
       <button class="danger" data-a="delplot">Delete shape</button>`);
-    map.fitBounds(L.latLngBounds(pl.pts), { maxZoom: 19, padding: [140, 140] });
+    fit(pl.pts);
     show(`<h3>Plot <strong>${esc(pl.no)}</strong>${showStatus ? `<span class="chip" style="background:${st(pl)[1]}">${st(pl)[0]}</span>` : ''}</h3>
       <div><p class="big">${fmtArea(+pl.area || 0)}</p>${unit === 'sqm' ? '' : `<small>${fmtArea(+pl.area || 0, 'sqm')}</small>`}</div>${unitSeg()}
       <dl>${[['Price', pl.price], ['Note', pl.note]].filter(r => r[1]).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
@@ -412,58 +448,70 @@ function renderMap(p, edit, params) {
     if (window.QRCode) new QRCode($('#qr'), { text: url, width: 150, height: 150 });
   }
 
-  map.on('click', e => {
-    if (mode === 'overlay') return;
-    if (mode === 'match') return matchClick([e.latlng.lat, e.latlng.lng]);
+  // cursor pixel inside the map box, from the mouse event when there is one
+  const evPx = e => { const d = e.domEvent; if (d && 'clientX' in d) { const r = $('#map').getBoundingClientRect(); return { x: d.clientX - r.left, y: d.clientY - r.top }; } return px(ll2(e.latLng)); };
+  const seg = (a, c, d) => { // a measured side: solid line with its length
+    marks.add(line([a, c], { strokeColor: '#fff', strokeWeight: 2.5 }));
+    marks.label([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2], `<span style="transform:translate(-50%,-50%) rotate(${angle(a, c).toFixed(1)}deg)">${fmtLen(d)}</span>`, 'dim');
+  };
+  function onClick(e) {
+    if (mode === 'overlay' || !view.getProjection()) return;
+    if (mode === 'match') return matchClick(ll2(e.latLng));
     if (!mode) { sel = null; draw(); hide(); return; }
-    if (closed) { marks.clearLayers(); pts = []; run = 0; closed = false; hide(); } // a finished loop: this click starts a new measurement
-    const s = snap(e), a = pts.at(-1), c = s.ll;
-    band.setLatLngs([]);
+    if (closed) { marks.clear(); pts = []; run = 0; closed = false; hide(); } // a finished loop: this click starts a new measurement
+    const s = snap(ll2(e.latLng), evPx(e)), a = pts.at(-1), c = s.ll;
+    band.setPath([]);
     if (s.close && mode === 'draw') return act.finish(); // clicking the first corner again finishes the shape
     if (s.close) { // ruler loop closed: add the last side, then stop and show perimeter and area
-      const d = map.distance(a, c); run += d; closed = true; tip.hidden = mark.hidden = true;
-      L.polyline([a, c], { color: '#fff', weight: 2.5, interactive: false }).addTo(marks);
-      L.marker([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2], { interactive: false, icon: L.divIcon({ className: 'dim', html: `<span style="transform:translate(-50%,-50%) rotate(${angle(a, c).toFixed(1)}deg)">${fmtLen(d)}</span>`, iconSize: [0, 0] }) }).addTo(marks);
+      const d = dist(a, c); run += d; closed = true; tip.hidden = mark.hidden = true;
+      seg(a, c, d);
       return show(`<h3>Measurement</h3><div><p class="big">${fmtLen(run)}</p><small>around the loop</small></div><div><p class="big">${fmtArea(area(pts))}</p><small>inside the loop</small></div><p><small>Click the map to start a new measurement.</small></p>`);
     }
     pts.push(c);
-    if (mode !== 'ruler') return temp.setLatLngs(pts);
-    L.circleMarker(c, { radius: 5, color: '#fff', fillColor: '#fff', fillOpacity: 1, interactive: false }).addTo(marks);
+    if (mode !== 'ruler') return temp.setPath(pts.map(LL));
+    dot(c, '#fff');
     if (!a) return;
-    const d = map.distance(a, c); run += d;
-    L.polyline([a, c], { color: '#fff', weight: 2.5, interactive: false }).addTo(marks);
-    L.marker([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2], { interactive: false, icon: L.divIcon({ className: 'dim', html: `<span style="transform:translate(-50%,-50%) rotate(${angle(a, c).toFixed(1)}deg)">${fmtLen(d)}</span>`, iconSize: [0, 0] }) }).addTo(marks);
-  });
-  map.on('mousemove', e => { // snap marker, dashed line from the last point, and the running total beside the cursor
-    if ((mode !== 'ruler' && mode !== 'draw') || closed) return;
-    const s = snap(e), at = map.latLngToContainerPoint(s.ll);
+    const d = dist(a, c); run += d;
+    seg(a, c, d);
+  }
+  function onMove(e) { // snap marker, dashed line from the last point, and the running total beside the cursor
+    if ((mode !== 'ruler' && mode !== 'draw') || closed || !view.getProjection()) return;
+    const c = evPx(e), s = snap(ll2(e.latLng), c), at = px(s.ll);
     mark.hidden = !s.kind; mark.className = s.kind || ''; mark.style.transform = `translate(${at.x}px, ${at.y}px)`;
     if (!pts.length) return;
-    band.setLatLngs([pts.at(-1), s.ll]);
+    band.setPath([pts.at(-1), s.ll].map(LL));
     if (mode !== 'ruler') return;
-    tip.hidden = false; tip.textContent = fmtLen(run + map.distance(pts.at(-1), s.ll));
-    tip.style.transform = `translate(${e.containerPoint.x + 14}px, ${e.containerPoint.y - 30}px)`;
-  });
-  map.on('zoomend', draw); // label sizes and angles depend on zoom
-  map.on('locationfound', e => L.circleMarker(e.latlng, { radius: 7, color: '#fff', fillColor: '#3b82f6', fillOpacity: 1 }).addTo(map));
-  map.on('locationerror', () => show('<h3>Location unavailable</h3><p>Allow location access in your browser and try again.</p>'));
+    tip.hidden = false; tip.textContent = fmtLen(run + dist(pts.at(-1), s.ll));
+    tip.style.transform = `translate(${c.x + 14}px, ${c.y - 30}px)`;
+  }
+  map.addListener('click', onClick);
+  map.addListener('mousemove', onMove);
+  let zoomNow = p.zoom; // label sizes, angles and side marks depend on zoom: redraw once a zoom settles
+  map.addListener('idle', () => { if (map.getZoom() !== zoomNow) { zoomNow = map.getZoom(); draw(); } });
+  const noLocation = () => show('<h3>Location unavailable</h3><p>Allow location access in your browser and try again.</p>');
 
   const act = {
     close() { hide(); if (mode === 'ruler' || mode === 'overlay' || mode === 'match') setMode(null); },
     ovmatch() { setMode('match'); matchStep(); },
     overlay: overlayPanel,
-    ovhere() { const c = map.getCenter(); p.overlay.center = [c.lat, c.lng]; save(); drawOverlay(); },
+    ovhere() { p.overlay.center = ll2(map.getCenter()); save(); drawOverlay(); },
     ovhide() { p.overlay.hidden = !p.overlay.hidden; save(); drawOverlay(); overlayPanel(); },
     ovdel() { if (confirm('Remove the tracing overlay? Shapes you have drawn stay.')) { delete p.overlay; save(); drawOverlay(); overlayPanel(); } },
-    home() { map.setView(p.center, p.zoom); },
-    zin() { map.zoomIn(); },
-    zout() { map.zoomOut(); },
+    home() { map.setCenter(LL(p.center)); map.setZoom(p.zoom); },
+    zin() { map.setZoom(map.getZoom() + 1); },
+    zout() { map.setZoom(map.getZoom() - 1); },
     ruler() { hide(); setMode(mode === 'ruler' ? null : 'ruler'); },
     filters, share,
     resetf() { range.min = 0; range.max = Infinity; Object.keys(STATUS).forEach(k => shown.add(k)); draw(); filters(); },
     unit(el) { unit = el.dataset.u; if ($('#match')) { draw(); filters(); } else if (sel) select(sel); },
     async copy() { try { await navigator.clipboard.writeText($('#link').textContent); $('[data-a=copy]').textContent = 'Copied'; } catch { $('[data-a=copy]').textContent = 'Select the link above and copy it'; } },
-    gps() { map.locate({ setView: true, maxZoom: 18 }); },
+    gps() {
+      if (!navigator.geolocation) return noLocation();
+      navigator.geolocation.getCurrentPosition(pos => {
+        const c = [pos.coords.latitude, pos.coords.longitude];
+        map.setCenter(LL(c)); map.setZoom(18); here.clear(); here.label(c, '<i class="dot me"></i>');
+      }, noLocation);
+    },
     info() { show(`${p.logo ? `<img src="${esc(p.logo)}" alt="">` : ''}<h3>${esc(p.name)}</h3><p>${esc(p.info) || 'No description yet.'}</p><p>${plots().length} plots</p>${contact(`I am interested in ${p.name}`)}<small>Powered by Whysquare</small>`, 'modal'); },
     gallery() { show('<h3>Gallery</h3>' + (p.gallery.length ? `<div class="shots">${p.gallery.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="" loading="lazy"></a>`).join('')}</div>` : '<p>No photos yet.</p>'), 'modal wide'); },
     draw() { sel = null; draw(); hide(); setMode('draw'); },
@@ -474,7 +522,7 @@ function renderMap(p, edit, params) {
       p.plots.push(pl); save(); setMode(null); select(pl);
     },
     delplot() { if (sel && confirm(`Delete ${sel.no || 'this shape'}?`)) { p.plots = p.plots.filter(x => x !== sel); sel = null; save(); draw(); hide(); } },
-    sethome() { const c = map.getCenter(); p.center = [c.lat, c.lng]; p.zoom = map.getZoom(); save(); show('<h3>Home view saved</h3><p>The project now opens at this position and zoom.</p>'); },
+    sethome() { p.center = ll2(map.getCenter()); p.zoom = map.getZoom(); save(); show('<h3>Home view saved</h3><p>The project now opens at this position and zoom.</p>'); },
     settings() {
       show(`<h3>Project settings</h3>${field('Name', 'sf="name"', p.name)}${field('Tagline', 'sf="tagline"', p.tagline)}
         <label>Logo (replaces the name on the map)<input type="file" accept="image/*" data-logo></label>${p.logo ? b('rmlogo', 'Remove logo') : ''}
@@ -532,10 +580,10 @@ function renderMap(p, edit, params) {
     if (e.target.id === 'search') {
       const q = f.get('q').trim().toLowerCase(), pl = plots().find(x => String(x.no).toLowerCase() === q);
       if (!pl) return show(`<h3>No plot "${esc(q)}"</h3><p>Check the number and try again.</p>`);
-      map.fitBounds(L.latLngBounds(pl.pts), { maxZoom: 19, padding: [140, 140] }); select(pl);
+      fit(pl.pts); select(pl);
     } else {
       const [la, ln] = f.get('ll').split(',').map(Number);
-      if (Math.abs(la) <= 90 && Math.abs(ln) <= 180) map.setView([la, ln], 17);
+      if (Math.abs(la) <= 90 && Math.abs(ln) <= 180) { map.setCenter(LL([la, ln])); map.setZoom(17); }
       else show('<h3>Could not read that</h3><p>Type latitude and longitude like 18.6105, 73.9120</p>');
     }
   };
@@ -551,5 +599,10 @@ function renderMap(p, edit, params) {
     db = shared;
   } else if (!hasData(db)) db = seed(); // no file and nothing saved: the built-in demo
   save();
+  await new Promise(ok => { // Google Maps script; the dashboard still works if it fails to load
+    if (window.google?.maps) return ok();
+    window.gmapsReady = ok;
+    document.head.append(Object.assign(document.createElement('script'), { src: `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&v=weekly&loading=async&callback=gmapsReady`, async: true, onerror: ok }));
+  });
   route();
 })();

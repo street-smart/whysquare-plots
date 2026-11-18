@@ -58,11 +58,13 @@ input::file-selector-button { font: inherit; font-weight: 600; color: var(--navy
 .viewer { position: relative; overflow: hidden; }
 #map { position: absolute; inset: 0; background: #0b1016; }
 /* credit line: slim dark bar, small type, plain separators */
-.leaflet-container .leaflet-control-attribution { background: rgba(17, 29, 42, .82); color: var(--dim); font: 400 10.5px/1.6 var(--sans); padding: 0 8px; margin: 0; border-radius: 0; }
-.leaflet-container .leaflet-control-attribution a { color: var(--cream); text-decoration: none; }
-.leaflet-container .leaflet-control-attribution a:hover { text-decoration: underline; }
-.leaflet-tile-pane { filter: grayscale(.7) brightness(.42); }
-path.leaflet-interactive:hover { filter: brightness(1.12); }
+.gshade { position: absolute; pointer-events: none; backdrop-filter: grayscale(.7) brightness(.42); } /* dims the imagery, not the plots */
+.gl, .gl > div { position: absolute; left: 0; top: 0; pointer-events: none; }
+.gl .c { transform: translate(-50%, -50%); white-space: nowrap; }
+.dot { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; border: 2px solid #fff; box-sizing: border-box; box-shadow: 0 0 0 1px rgba(0, 0, 0, .55); }
+.dot.me { width: 16px; height: 16px; margin: -8px 0 0 -8px; background: #3b82f6; }
+.ov { position: absolute; }
+.nomap { margin: 40vh auto 0; max-width: 28em; text-align: center; color: var(--dim); }
 .splash { position: absolute; inset: 0; z-index: 2000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; background: var(--navy-deep); text-align: center; padding: 24px; transition: opacity .35s; }
 .splash.gone { opacity: 0; pointer-events: none; }
 .splash h2 { font-size: 34px; }
