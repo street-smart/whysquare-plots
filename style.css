@@ -58,7 +58,7 @@ input::file-selector-button { font: inherit; font-weight: 600; color: var(--navy
 .viewer { position: relative; overflow: hidden; }
 #map { position: absolute; inset: 0; background: #0b1016; }
 /* credit line: slim dark bar, small type, plain separators */
-.gshade { position: absolute; pointer-events: none; backdrop-filter: grayscale(.7) brightness(.42); } /* dims the imagery, not the plots */
+.gshade { position: absolute; pointer-events: none; backdrop-filter: grayscale(1) brightness(.4); } /* dims the imagery, not the plots */
 .gl, .gl > div { position: absolute; left: 0; top: 0; pointer-events: none; }
 .gl .c { transform: translate(-50%, -50%); white-space: nowrap; }
 .dot { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; border: 2px solid #fff; box-sizing: border-box; box-shadow: 0 0 0 1px rgba(0, 0, 0, .55); }

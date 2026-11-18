@@ -378,10 +378,10 @@ function renderMap(p, edit, params) {
     const mpp = 156543.03392 * Math.cos(p.center[0] * Math.PI / 180) / 2 ** map.getZoom(); // metres per screen pixel
     for (const pl of [...p.plots].sort((a, c) => isPlot(a) - isPlot(c))) { // roads and green areas go under plots
       const plot = isPlot(pl), on = !plot || match(pl);
-      const fill = pl === sel ? '#2f86e0' : !plot ? KINDS[pl.kind][1] : showStatus ? st(pl)[1] : '#d9cfb8';
-      const poly = layer.add(new G.Polygon({ paths: pl.pts.map(LL), strokeColor: '#1b1d1c', strokeWeight: 1, fillColor: fill, fillOpacity: on ? .9 : .2, clickable: plot || edit, zIndex: plot ? 2 : 1 }));
+      const fill = pl === sel ? '#2f86e0' : !plot ? KINDS[pl.kind][1] : edit ? st(pl)[1] : '#d9cfb8'; // viewer: plain beige plots (Spacer look), status on the card and in Filters
+      const poly = layer.add(new G.Polygon({ paths: pl.pts.map(LL), strokeColor: plot ? '#f4efe4' : '#1b1d1c', strokeOpacity: plot ? .85 : 1, strokeWeight: 1, fillColor: fill, fillOpacity: on ? .9 : .2, clickable: plot || edit, zIndex: plot ? 2 : 1 }));
       // labels are sized from the shape, so they grow and shrink with the map and vanish when too small to read
-      const side = Math.sqrt(area(pl.pts)) / mpp, f = plot ? Math.min(side * .3, 34) : Math.min(side * .13, 14);
+      const side = Math.sqrt(area(pl.pts)) / mpp, f = plot ? Math.min(side * .3, 28) : Math.min(side * .13, 14);
       if (pl.no && f >= 6.500) {
         let rot = 0, longest = 0; // road and garden names run along the shape's longest side
         if (!plot) pl.pts.forEach((a, i) => { const c = pl.pts[(i + 1) % pl.pts.length], d = dist(a, c); if (d > longest) { longest = d; rot = angle(a, c); } });
