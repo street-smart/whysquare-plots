@@ -343,12 +343,12 @@ function renderMap(p, edit, params) {
   const STEPS = ['Click a clear corner on the drawing.', 'Now click where that corner really is on the satellite map.', 'Click a second corner on the drawing, far from the first.', 'Click where that second corner really is.'];
   // Align layout: same two-point match, but it moves and turns the project's own shapes (no scaling: the plan is in metres)
   const ALIGN = ['Click a corner of the layout. It snaps to plot corners.', 'Now click where that corner really is on the satellite map.', 'Click a second layout corner, far from the first.', 'Click where that second corner really is.'];
-  const matchStep = () => show(`<h3>${mode === 'align' ? 'Align layout' : 'Match two points'}</h3><p>Step ${pts.length + 1} of 4</p><p>${(mode === 'align' ? ALIGN : STEPS)[pts.length]}</p><p><small>You can zoom and pan between clicks. Press Escape to cancel.</small></p>`);
+  const matchStep = () => show(`<h3>${mode === 'align2' ? 'Align layout' : 'Match two points'}</h3><p>Step ${pts.length + 1} of 4</p><p>${(mode === 'align2' ? ALIGN : STEPS)[pts.length]}</p><p><small>You can zoom and pan between clicks. Press Escape to cancel.</small></p>`);
   function matchClick(ll) {
     pts.push(ll);
     dot(ll, pts.length % 2 ? '#f2b33d' : '#7bd66b');
     if (pts.length < 4) return matchStep();
-    if (mode === 'align') return alignLayout();
+    if (mode === 'align2') return alignLayout();
     const o = p.overlay, kx = 111320 * Math.cos(o.center[0] * Math.PI / 180), xy = v => [(v[1] - o.center[1]) * kx, (v[0] - o.center[0]) * 110540]; // metres east and north of the drawing's centre
     const [a1, b1, a2, b2] = pts.map(xy), da = [a2[0] - a1[0], a2[1] - a1[1]], db = [b2[0] - b1[0], b2[1] - b1[1]];
     const s = Math.hypot(...db) / Math.hypot(...da), th = Math.atan2(db[1], db[0]) - Math.atan2(da[1], da[0]);
@@ -360,6 +360,18 @@ function renderMap(p, edit, params) {
     o.rot = +(((+o.rot - th * 180 / Math.PI + 540) % 360) - 180).toFixed(2); // the screen turns clockwise, the ground angle counts anticlockwise
     save(); drawOverlay(); overlayPanel();
   }
+  // Align layout by hand: drag any shape to move the whole layout, turn it with the slider. Reset goes back to how it
+  // was when the panel opened. Changes are saved as they happen.
+  let alignFrom = null, alignRot = 0;
+  const shiftLayout = d => { p.plots.forEach(s => { s.pts = s.pts.map(v => [v[0] + d[0], v[1] + d[1]]); }); p.center = [p.center[0] + d[0], p.center[1] + d[1]]; };
+  const turnLayout = deg => { // about the layout's middle, in metres
+    const c0 = p.center, kx = 111320 * Math.cos(c0[0] * Math.PI / 180), r = deg * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+    const t = v => { const x = (v[1] - c0[1]) * kx, y = (v[0] - c0[0]) * 110540; return [c0[0] + (sn * x + c * y) / 110540, c0[1] + (c * x - sn * y) / kx]; };
+    p.plots.forEach(s => { s.pts = s.pts.map(t); });
+  };
+  const alignPanel = () => show(`<h3>Align layout</h3><p>Drag the layout on the map to move it. Turn it with the slider.</p>
+    <label>Turn (degrees)<input type="range" min="-20" max="20" step="0.1" data-al="rot" value="${alignRot}"><input type="number" step="0.1" data-al="rot" value="${alignRot}"></label>
+    <div class="cta">${b('align2', 'Match two points')}${b('alreset', 'Reset')}<button class="primary" data-a="close">Done</button></div>`);
   function alignLayout() { // turn about the first layout point, then move it onto its true spot
     const kx = 111320 * Math.cos(p.center[0] * Math.PI / 180), xy = v => [(v[1] - p.center[1]) * kx, (v[0] - p.center[0]) * 110540];
     const [a1, b1, a2, b2] = pts.map(xy), da = [a2[0] - a1[0], a2[1] - a1[1]], db = [b2[0] - b1[0], b2[1] - b1[1]];
@@ -406,8 +418,9 @@ function renderMap(p, edit, params) {
     } catch { show('<h3>Could not open that file</h3><p>Use a PNG, JPG or PDF. For CAD drawings, export a PDF first.</p>'); }
   }
 
+  const polys = new Map(); // shape -> its Google polygon, for moving them all while one is dragged
   function draw() {
-    layer.clear();
+    layer.clear(); polys.clear();
     const mpp = 156543.03392 * Math.cos(p.center[0] * Math.PI / 180) / 2 ** map.getZoom(); // metres per screen pixel
     for (const pl of [...p.plots].sort((a, c) => isPlot(a) - isPlot(c))) { // roads and green areas go under plots
       const plot = isPlot(pl), on = !plot || match(pl);
@@ -422,6 +435,13 @@ function renderMap(p, edit, params) {
           `no${plot ? '' : ' faint'}${pl === sel ? ' on' : ''}`);
       }
       poly.addListener('click', e => mode ? onClick(e) : select(pl)); // while drawing or measuring, the click goes on to the map
+      polys.set(pl, poly);
+      if (mode === 'align') { // drag one shape: the rest follow live, labels hide until it is dropped
+        poly.setOptions({ draggable: true, clickable: true });
+        const d = () => { const q = poly.getPath().getAt(0); return [q.lat() - pl.pts[0][0], q.lng() - pl.pts[0][1]]; };
+        poly.addListener('drag', () => { const dd = d(); app.classList.add('dragging'); for (const [o, g] of polys) if (o !== pl) g.setPaths(o.pts.map(v => LL([v[0] + dd[0], v[1] + dd[1]]))); });
+        poly.addListener('dragend', () => { shiftLayout(d()); app.classList.remove('dragging'); save(); draw(); });
+      }
       poly.addListener('mousemove', onMove);
     }
     if (!sel || !view.getProjection()) return;
@@ -490,7 +510,8 @@ function renderMap(p, edit, params) {
   function onClick(e) {
     if (mode === 'overlay' || !view.getProjection()) return;
     if (mode === 'match') return matchClick(ll2(e.latLng));
-    if (mode === 'align') return matchClick(pts.length % 2 ? ll2(e.latLng) : snap(ll2(e.latLng), evPx(e)).ll); // layout points snap to corners
+    if (mode === 'align') return; // dragging moves the layout; a plain click does nothing
+    if (mode === 'align2') return matchClick(pts.length % 2 ? ll2(e.latLng) : snap(ll2(e.latLng), evPx(e)).ll); // layout points snap to corners
     if (!mode) { sel = null; draw(); hide(); return; }
     if (closed) { marks.clear(); pts = []; run = 0; closed = false; hide(); } // a finished loop: this click starts a new measurement
     const s = snap(ll2(e.latLng), evPx(e)), a = pts.at(-1), c = s.ll;
@@ -525,9 +546,11 @@ function renderMap(p, edit, params) {
   const noLocation = () => show('<h3>Location unavailable</h3><p>Allow location access in your browser and try again.</p>');
 
   const act = {
-    close() { hide(); if (mode === 'ruler' || mode === 'overlay' || mode === 'match' || mode === 'align') setMode(null); },
+    close() { hide(); const was = mode; if (['ruler', 'overlay', 'match', 'align', 'align2'].includes(mode)) setMode(null); if (was === 'align') draw(); },
     ovmatch() { setMode('match'); matchStep(); },
-    align() { sel = null; draw(); setMode('align'); matchStep(); },
+    align() { sel = null; alignFrom = JSON.stringify({ c: p.center, s: p.plots.map(x => x.pts) }); alignRot = 0; setMode('align'); draw(); alignPanel(); },
+    align2() { setMode('align2'); draw(); matchStep(); },
+    alreset() { const o = JSON.parse(alignFrom); p.center = o.c; p.plots.forEach((x, i) => { x.pts = o.s[i]; }); alignRot = 0; save(); draw(); alignPanel(); },
     overlay: overlayPanel,
     ovhere() { p.overlay.center = ll2(map.getCenter()); save(); drawOverlay(); },
     ovhide() { p.overlay.hidden = !p.overlay.hidden; save(); drawOverlay(); overlayPanel(); },
@@ -579,6 +602,11 @@ function renderMap(p, edit, params) {
   app.oninput = e => {
     const t = e.target.dataset, v = e.target.value;
     if (e.target.id === 'incl') share();
+    else if (t.al) { // turn by the change since the last value; saved on release, in onchange
+      const v = Math.max(-20, Math.min(20, +e.target.value || 0)); turnLayout(v - alignRot); alignRot = v;
+      app.querySelectorAll('[data-al]').forEach(i => { if (i !== e.target) i.value = v; });
+      draw();
+    }
     else if (t.ov && p.overlay) { // saved on release, in onchange, so dragging a slider stays smooth
       if (t.ov !== 'width' || +v > 0) p.overlay[t.ov] = +v;
       app.querySelectorAll(`[data-ov="${t.ov}"]`).forEach(i => { if (i !== e.target) i.value = v; });
@@ -596,7 +624,7 @@ function renderMap(p, edit, params) {
     }
   };
   app.onchange = e => { // logo: shrink to 360px wide so it fits in browser storage
-    if (e.target.dataset.ov) return save();
+    if (e.target.dataset.ov || e.target.dataset.al) return save();
     if (e.target.dataset.ovpage !== undefined) return pdf && loadOverlay(pdf.file, +e.target.value);
     if (e.target.dataset.ovfile !== undefined) return e.target.files[0] && loadOverlay(e.target.files[0]);
     const file = e.target.dataset.logo !== undefined && e.target.files[0];

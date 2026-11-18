@@ -117,7 +117,8 @@ input::file-selector-button { font: inherit; font-weight: 600; color: var(--navy
 .editbar [data-a=finish], .editbar [data-a=cancel] { display: none; }
 [data-mode=draw] .editbar [data-a=finish], [data-mode=draw] .editbar [data-a=cancel] { display: inline-flex; }
 [data-mode=draw] .editbar [data-a=draw] { display: none; }
-[data-mode=draw] #map, [data-mode=ruler] #map, [data-mode=match] #map, [data-mode=align] #map { cursor: crosshair; }
+[data-mode=draw] #map, [data-mode=ruler] #map, [data-mode=match] #map, [data-mode=align2] #map { cursor: crosshair; }
+.dragging .gl { display: none; } /* labels hide while the layout is dragged */
 
 #panel { left: 16px; bottom: 28px; width: 330px; max-height: calc(100% - 190px); overflow: hidden auto; display: flex; flex-direction: column; gap: 12px; padding: 20px; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--line); border-radius: 6px; }
 #panel { margin: 0; right: auto; top: auto; max-width: none; color: var(--cream); } /* undo the browser's centred dialog defaults */
