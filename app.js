@@ -189,7 +189,8 @@ function renderMap(p, edit, params) {
   <div class="badge"><img src="whysquare_logo.png" alt="Whysquare"><small>Automate. Innovate. Elevate</small></div>`;
 
   map = L.map('map', { zoomControl: false, doubleClickZoom: false }).setView(p.center, p.zoom);
-  const tiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxNativeZoom: 18, maxZoom: 21, attribution: 'Imagery &copy;2026 Esri, Maxar, Earthstar Geographics, GIS User Community | <a href="https://www.esri.com/en-us/legal/terms/full-master-agreement" target="_blank" rel="noopener">Terms</a>' }).addTo(map);
+  // Google satellite with labels (lyrs=y). shortcut: direct tile URLs, no API key; move to the Google Maps Tiles API if usage grows
+  const tiles = L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { subdomains: '0123', maxNativeZoom: 20, maxZoom: 21, attribution: 'Map data &copy;2026 Google | <a href="https://www.google.com/intl/en_in/help/terms_maps/" target="_blank" rel="noopener">Terms</a>' }).addTo(map);
   map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>'); // drop the default flag icon
   const splash = $('.splash'); // loading screen: goes once the imagery is in, or after 3s on a slow connection
   if (splash) { const done = () => { splash.classList.add('gone'); setTimeout(() => splash.remove(), 400); }; tiles.once('load', done); setTimeout(done, 3000); }
