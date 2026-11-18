@@ -180,7 +180,7 @@ function renderMap(p, edit, params) {
     ${p.logo ? `<img src="${esc(p.logo)}" alt="${esc(p.name)}">` : `<div><b>${esc(p.name)}</b><small>${esc(p.tagline)}</small></div>`}
     ${viewOnly ? '' : `<a class="pill ${edit ? 'primary' : ''}" href="#/p/${p.id}${edit ? '' : '/edit'}">${edit ? 'Done' : ico('edit') + 'Edit'}</a>`}</header>
   ${edit ? `<div class="editbar">${b('draw', '+ Draw shape')}<button class="primary" data-a="finish">Finish shape</button>${b('cancel', 'Cancel')}
-    ${b('overlay', 'Tracing overlay')}${b('settings', 'Project settings')}${b('sethome', 'Set home view')}${b('cad', 'Export CAD')}
+    ${b('overlay', 'Tracing overlay')}${b('settings', 'Project settings')}${b('align', 'Align layout')}${b('sethome', 'Set home view')}${b('cad', 'Export CAD')}
     <form id="goto"><input name="ll" placeholder="lat, lng" aria-label="Go to latitude, longitude"><button>Go</button></form></div>` : ''}
   <div class="tools"><button class="round compass" data-a="north" aria-label="Face north" title="Face north"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3 15 12H9z" fill="#e5604d"/><path d="M12 21 9 12h6z" fill="currentColor"/></svg></button>
     <button class="round" data-a="tilt" aria-label="3D view" title="3D view"><b>3D</b></button>${rb('zin', 'Zoom in')}${rb('zout', 'Zoom out')}${rb('ruler', 'Ruler')}${rb('home', 'Home view')}${rb('filters', 'Filters')}${rb('share', 'Share')}</div>
@@ -341,11 +341,14 @@ function renderMap(p, edit, params) {
   }
   // Match two points: a corner on the drawing, then its true spot on the map, twice. The drawing is then moved, turned and scaled to fit.
   const STEPS = ['Click a clear corner on the drawing.', 'Now click where that corner really is on the satellite map.', 'Click a second corner on the drawing, far from the first.', 'Click where that second corner really is.'];
-  const matchStep = () => show(`<h3>Match two points</h3><p>Step ${pts.length + 1} of 4</p><p>${STEPS[pts.length]}</p><p><small>You can zoom and pan between clicks. Press Escape to cancel.</small></p>`);
+  // Align layout: same two-point match, but it moves and turns the project's own shapes (no scaling: the plan is in metres)
+  const ALIGN = ['Click a corner of the layout. It snaps to plot corners.', 'Now click where that corner really is on the satellite map.', 'Click a second layout corner, far from the first.', 'Click where that second corner really is.'];
+  const matchStep = () => show(`<h3>${mode === 'align' ? 'Align layout' : 'Match two points'}</h3><p>Step ${pts.length + 1} of 4</p><p>${(mode === 'align' ? ALIGN : STEPS)[pts.length]}</p><p><small>You can zoom and pan between clicks. Press Escape to cancel.</small></p>`);
   function matchClick(ll) {
     pts.push(ll);
     dot(ll, pts.length % 2 ? '#f2b33d' : '#7bd66b');
     if (pts.length < 4) return matchStep();
+    if (mode === 'align') return alignLayout();
     const o = p.overlay, kx = 111320 * Math.cos(o.center[0] * Math.PI / 180), xy = v => [(v[1] - o.center[1]) * kx, (v[0] - o.center[0]) * 110540]; // metres east and north of the drawing's centre
     const [a1, b1, a2, b2] = pts.map(xy), da = [a2[0] - a1[0], a2[1] - a1[1]], db = [b2[0] - b1[0], b2[1] - b1[1]];
     const s = Math.hypot(...db) / Math.hypot(...da), th = Math.atan2(db[1], db[0]) - Math.atan2(da[1], da[0]);
@@ -356,6 +359,18 @@ function renderMap(p, edit, params) {
     o.width = Math.round(o.width * s);
     o.rot = +(((+o.rot - th * 180 / Math.PI + 540) % 360) - 180).toFixed(2); // the screen turns clockwise, the ground angle counts anticlockwise
     save(); drawOverlay(); overlayPanel();
+  }
+  function alignLayout() { // turn about the first layout point, then move it onto its true spot
+    const kx = 111320 * Math.cos(p.center[0] * Math.PI / 180), xy = v => [(v[1] - p.center[1]) * kx, (v[0] - p.center[0]) * 110540];
+    const [a1, b1, a2, b2] = pts.map(xy), da = [a2[0] - a1[0], a2[1] - a1[1]], db = [b2[0] - b1[0], b2[1] - b1[1]];
+    setMode(null);
+    if (Math.hypot(...da) < 5) return show('<h3>Could not align</h3><p>Pick two layout corners that are far apart, then try again.</p>');
+    const th = Math.atan2(db[1], db[0]) - Math.atan2(da[1], da[0]), c = Math.cos(th), sn = Math.sin(th), c0 = p.center;
+    const move = v => { const [x, y] = xy(v), dx = x - a1[0], dy = y - a1[1]; return [c0[0] + (b1[1] + sn * dx + c * dy) / 110540, c0[1] + (b1[0] + c * dx - sn * dy) / kx]; };
+    p.plots.forEach(s => { s.pts = s.pts.map(move); });
+    p.center = move(p.center);
+    save(); draw();
+    show(`<h3>Layout aligned</h3><p>Moved ${Math.hypot(b1[0] - a1[0], b1[1] - a1[1]).toFixed(1)} m and turned ${(th * 180 / Math.PI).toFixed(2)}°.</p><p><small>The two lengths differed by ${Math.abs(Math.hypot(...db) - Math.hypot(...da)).toFixed(1)} m; the plan keeps its true size.</small></p>`);
   }
   let pdf = null; // the PDF picked in this visit: { file, pages, page }, so another page can be chosen without re-uploading
   async function loadOverlay(file, pageNo) {
@@ -475,6 +490,7 @@ function renderMap(p, edit, params) {
   function onClick(e) {
     if (mode === 'overlay' || !view.getProjection()) return;
     if (mode === 'match') return matchClick(ll2(e.latLng));
+    if (mode === 'align') return matchClick(pts.length % 2 ? ll2(e.latLng) : snap(ll2(e.latLng), evPx(e)).ll); // layout points snap to corners
     if (!mode) { sel = null; draw(); hide(); return; }
     if (closed) { marks.clear(); pts = []; run = 0; closed = false; hide(); } // a finished loop: this click starts a new measurement
     const s = snap(ll2(e.latLng), evPx(e)), a = pts.at(-1), c = s.ll;
@@ -509,8 +525,9 @@ function renderMap(p, edit, params) {
   const noLocation = () => show('<h3>Location unavailable</h3><p>Allow location access in your browser and try again.</p>');
 
   const act = {
-    close() { hide(); if (mode === 'ruler' || mode === 'overlay' || mode === 'match') setMode(null); },
+    close() { hide(); if (mode === 'ruler' || mode === 'overlay' || mode === 'match' || mode === 'align') setMode(null); },
     ovmatch() { setMode('match'); matchStep(); },
+    align() { sel = null; draw(); setMode('align'); matchStep(); },
     overlay: overlayPanel,
     ovhere() { p.overlay.center = ll2(map.getCenter()); save(); drawOverlay(); },
     ovhide() { p.overlay.hidden = !p.overlay.hidden; save(); drawOverlay(); overlayPanel(); },
