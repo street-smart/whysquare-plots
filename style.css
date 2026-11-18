@@ -58,7 +58,6 @@ input::file-selector-button { font: inherit; font-weight: 600; color: var(--navy
 .viewer { position: relative; overflow: hidden; }
 #map { position: absolute; inset: 0; background: #0b1016; }
 /* credit line: slim dark bar, small type, plain separators */
-.gshade { position: absolute; pointer-events: none; backdrop-filter: grayscale(1) brightness(.4); } /* dims the imagery, not the plots */
 .gl, .gl > div { position: absolute; left: 0; top: 0; pointer-events: none; }
 .gl .c { transform: translate(-50%, -50%); white-space: nowrap; }
 .dot { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; border: 2px solid #fff; box-sizing: border-box; box-shadow: 0 0 0 1px rgba(0, 0, 0, .55); }
@@ -98,7 +97,10 @@ input::file-selector-button { font: inherit; font-weight: 600; color: var(--navy
 .badge small { color: var(--cream); }
 
 .tools { right: 16px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; }
-.tools [data-a=zout] { margin-bottom: 8px; } /* small gap separates zoom from the tools */
+.tools [data-a=zout] { margin-bottom: 8px; }
+.tools [data-a=tilt] b { font: 700 15px var(--sans); }
+.tools [data-a=tilt].on { background: var(--cream); color: var(--navy-deep); }
+.compass svg { transition: transform .1s linear; } /* small gap separates zoom from the tools */
 [data-mode=ruler] [data-a=ruler] { background: var(--cream); color: var(--navy-deep); }
 .dock { right: 16px; bottom: 28px; width: min(440px, calc(100% - 32px)); display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .dock form { grid-column: span 2; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px; padding: 0 16px; min-height: 44px; }

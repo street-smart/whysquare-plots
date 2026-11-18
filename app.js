@@ -2,6 +2,8 @@
 const KEY = 'whysquare-plots-v1';
 // Google Maps JavaScript API key. Restrict it to this site's web address in Google Cloud. Empty = development mode (watermarked map).
 const GMAPS_KEY = '';
+// Map ID of a vector map style (needed for 3D tilt and rotation). DEMO_MAP_ID is Google's test ID; make your own in Google Cloud > Map Management.
+const GMAPS_MAP_ID = 'DEMO_MAP_ID';
 const STATUS = { available: ['Available', '#7bd66b'], reserved: ['Reserved', '#f2b33d'], sold: ['Sold', '#e5604d'] };
 const KINDS = { plot: ['Plot'], road: ['Road', '#3a3e3c'], green: ['Green area', '#4a6630'], amenity: ['Amenity', '#6b7f9c'] };
 // unit: [area label, sq m to unit, length label, m to unit]
@@ -180,7 +182,8 @@ function renderMap(p, edit, params) {
   ${edit ? `<div class="editbar">${b('draw', '+ Draw shape')}<button class="primary" data-a="finish">Finish shape</button>${b('cancel', 'Cancel')}
     ${b('overlay', 'Tracing overlay')}${b('settings', 'Project settings')}${b('sethome', 'Set home view')}${b('cad', 'Export CAD')}
     <form id="goto"><input name="ll" placeholder="lat, lng" aria-label="Go to latitude, longitude"><button>Go</button></form></div>` : ''}
-  <div class="tools">${rb('zin', 'Zoom in')}${rb('zout', 'Zoom out')}${rb('ruler', 'Ruler')}${rb('home', 'Home view')}${rb('filters', 'Filters')}${rb('share', 'Share')}</div>
+  <div class="tools"><button class="round compass" data-a="north" aria-label="Face north" title="Face north"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3 15 12H9z" fill="#e5604d"/><path d="M12 21 9 12h6z" fill="currentColor"/></svg></button>
+    <button class="round" data-a="tilt" aria-label="3D view" title="3D view"><b>3D</b></button>${rb('zin', 'Zoom in')}${rb('zout', 'Zoom out')}${rb('ruler', 'Ruler')}${rb('home', 'Home view')}${rb('filters', 'Filters')}${rb('share', 'Share')}</div>
   <div class="dock"><form id="search">${ico('search')}<input name="q" type="search" list="nos" placeholder="Search plot no." aria-label="Search plot number">
       <datalist id="nos">${plots().map(x => `<option value="${esc(x.no)}">`).join('')}</datalist></form>
     ${pb('gps', 'GPS')}${pb('gallery', 'Gallery')}${pb('info', 'Info')}
@@ -192,21 +195,19 @@ function renderMap(p, edit, params) {
 
   if (!window.google?.maps) { $('#map').innerHTML = '<p class="nomap">The map could not load. Check your connection and reload the page.</p>'; return; }
   const G = google.maps, LL = a => ({ lat: a[0], lng: a[1] }), ll2 = l => [l.lat(), l.lng()];
-  map = new G.Map($('#map'), { center: LL(p.center), zoom: p.zoom, mapTypeId: 'hybrid', tilt: 0, maxZoom: 21, disableDefaultUI: true, disableDoubleClickZoom: true, clickableIcons: false, gestureHandling: 'greedy', backgroundColor: '#0b1016' });
+  map = new G.Map($('#map'), { center: LL(p.center), zoom: p.zoom, mapTypeId: 'hybrid', tilt: 0, heading: 0, mapId: GMAPS_MAP_ID, renderingType: G.RenderingType.VECTOR, tiltInteractionEnabled: true, headingInteractionEnabled: true, maxZoom: 21, disableDefaultUI: true, disableDoubleClickZoom: true, clickableIcons: false, gestureHandling: 'greedy', backgroundColor: '#0b1016' });
   const splash = $('.splash'); // loading screen: goes once the imagery is in, or after 3s on a slow connection
   if (splash) { const done = () => { splash.classList.add('gone'); setTimeout(() => splash.remove(), 400); }; G.event.addListenerOnce(map, 'tilesloaded', done); setTimeout(done, 3000); }
 
   // One OverlayView does the screen <-> lat/lng maths and holds the HTML on the map: plot numbers, side lengths, ruler
   // dots, the imagery dimmer and the tracing drawing. Shapes and lines are native Google polygons and polylines.
   class View extends G.OverlayView {
-    items = []; box = Object.assign(document.createElement('div'), { className: 'gl' }); shade = Object.assign(document.createElement('div'), { className: 'gshade' }); svg = null;
-    onAdd() { const pn = this.getPanes(); pn.mapPane.append(this.shade); pn.floatPane.append(this.box); if (this.svg) pn.overlayMouseTarget.append(this.svg); draw(); }
+    items = []; box = Object.assign(document.createElement('div'), { className: 'gl' }); svg = null;
+    onAdd() { const pn = this.getPanes(); pn.floatPane.append(this.box); if (this.svg) pn.overlayMouseTarget.append(this.svg); draw(); }
     place(el, ll) { const q = this.getProjection()?.fromLatLngToDivPixel(LL(ll)); if (q) el.style.transform = `translate(${q.x}px, ${q.y}px)`; }
     draw() {
       const pr = this.getProjection(), m = $('#map'); if (!pr || !m) return;
       this.items.forEach(it => this.place(it.el, it.ll));
-      const o = pr.fromLatLngToDivPixel(pr.fromContainerPixelToLatLng(new G.Point(-200, -200))); // dimmer covers the view with a margin for panning
-      Object.assign(this.shade.style, { left: o.x + 'px', top: o.y + 'px', width: m.clientWidth + 400 + 'px', height: m.clientHeight + 400 + 'px' });
       if (this.svg) {
         const [[s, w], [n, e]] = ovBounds(p.overlay), a = pr.fromLatLngToDivPixel(LL([n, w])), c = pr.fromLatLngToDivPixel(LL([s, e]));
         Object.assign(this.svg.style, { left: a.x + 'px', top: a.y + 'px', width: c.x - a.x + 'px', height: c.y - a.y + 'px' });
@@ -233,6 +234,22 @@ function renderMap(p, edit, params) {
   };
   const dot = (ll, fill) => marks.label(ll, `<i class="dot" style="background:${fill}"></i>`);
   const layer = group(), here = group();
+  // Veil is ±0.05° (~11 km): Google's 3D renderer drops much larger shapes at close zoom.
+  // Like Spacer: far out, full-colour imagery with Google's names; zooming in, a dark veil under the plots fades the
+  // imagery down, and from zoom 18 Google's names go so only the layout's own labels show.
+  // ±0.05° (~11 km): Google's 3D renderer drops much larger shapes at close zoom
+  const veil = new G.Polygon({ map, paths: [[-1, -1], [-1, 1], [1, 1], [1, -1]].map(([a, b]) => LL([p.center[0] + a * .05, p.center[1] + b * .05])), fillColor: '#000', strokeOpacity: 0, clickable: false, zIndex: 0 });
+  const look = () => { const z = map.getZoom(); veil.setOptions({ fillOpacity: .66 * Math.max(0, Math.min(1, (z - 15) / 3)) }); const t = z >= 18 ? 'satellite' : 'hybrid'; if (map.getMapTypeId() !== t) map.setMapTypeId(t); };
+  look(); map.addListener('zoom_changed', look); map.addListener('idle', look); // again once settled: changes made mid-zoom can be dropped
+  // 3D: tilt and turn smoothly. The compass needle follows the heading; clicking it faces north.
+  const ease = (key, to) => {
+    const from = key === 'tilt' ? map.getTilt() : map.getHeading(), t0 = performance.now();
+    if (key === 'heading') to = from + ((to - from + 540) % 360 - 180); // the short way round
+    const step = now => { const k = Math.min(1, (now - t0) / 600); map.moveCamera({ [key]: from + (to - from) * (1 - (1 - k) ** 3) }); if (k < 1) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  };
+  map.addListener('heading_changed', () => { $('.compass svg').style.transform = `rotate(${-map.getHeading()}deg)`; });
+  map.addListener('tilt_changed', () => { const on = map.getTilt() > 0; $('[data-a=tilt] b').textContent = on ? '2D' : '3D'; $('[data-a=tilt]').classList.toggle('on', on); });
   const temp = line([], dash('#fff', '12px')); temp.setMap(map);
   const panel = $('#panel');
   const shown = new Set(Object.keys(STATUS));
@@ -296,6 +313,7 @@ function renderMap(p, edit, params) {
     svg.setAttribute('viewBox', `0 0 ${D} ${D}`); svg.setAttribute('class', 'ov'); svg.style.opacity = o.opacity;
     Object.entries({ href: o.src, x: (D - o.w) / 2, y: (D - o.h) / 2, width: o.w, height: o.h, transform: `rotate(${+o.rot || 0} ${D / 2} ${D / 2})` }).forEach(([k, v]) => img.setAttribute(k, v));
     svg.append(img);
+    if (map.getTilt() || map.getHeading()) map.moveCamera({ tilt: 0, heading: 0 }); // the drawing is laid flat, north up
     view.svg = svg; view.getPanes()?.overlayMouseTarget.append(svg); view.draw();
     G.OverlayView.preventMapHitsAndGesturesFrom(svg); // drags on the drawing move it, not the map
     const evLL = e => { const r = $('#map').getBoundingClientRect(); return toLL({ x: e.clientX - r.left, y: e.clientY - r.top }); };
@@ -486,8 +504,8 @@ function renderMap(p, edit, params) {
   }
   map.addListener('click', onClick);
   map.addListener('mousemove', onMove);
-  let zoomNow = p.zoom; // label sizes, angles and side marks depend on zoom: redraw once a zoom settles
-  map.addListener('idle', () => { if (map.getZoom() !== zoomNow) { zoomNow = map.getZoom(); draw(); } });
+  let camNow = ''; // label sizes, angles and side marks depend on zoom, tilt and heading: redraw once the camera settles
+  map.addListener('idle', () => { const c = [map.getZoom(), map.getTilt(), map.getHeading()].join(); if (c !== camNow) { camNow = c; draw(); } });
   const noLocation = () => show('<h3>Location unavailable</h3><p>Allow location access in your browser and try again.</p>');
 
   const act = {
@@ -501,6 +519,8 @@ function renderMap(p, edit, params) {
     zin() { map.setZoom(map.getZoom() + 1); },
     zout() { map.setZoom(map.getZoom() - 1); },
     ruler() { hide(); setMode(mode === 'ruler' ? null : 'ruler'); },
+    tilt() { ease('tilt', map.getTilt() > 0 ? 0 : 60); },
+    north() { ease('heading', 0); },
     filters, share,
     resetf() { range.min = 0; range.max = Infinity; Object.keys(STATUS).forEach(k => shown.add(k)); draw(); filters(); },
     unit(el) { unit = el.dataset.u; if ($('#match')) { draw(); filters(); } else if (sel) select(sel); },
