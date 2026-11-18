@@ -220,7 +220,13 @@ function renderMap(p, edit, params) {
   const pd = (a, c) => Math.hypot(a.x - c.x, a.y - c.y);
   const dist = (a, c) => { const r = Math.PI / 180, h = Math.sin((c[0] - a[0]) * r / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(c[0] * r) * Math.sin((c[1] - a[1]) * r / 2) ** 2; return 12742000 * Math.asin(Math.sqrt(h)); };
   const closest = (c, a, b) => { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy, t = l2 ? Math.max(0, Math.min(1, ((c.x - a.x) * dx + (c.y - a.y) * dy) / l2)) : 0; return { x: a.x + t * dx, y: a.y + t * dy }; };
-  const centroid = v => { let A = 0, x = 0, y = 0; v.forEach((a, i) => { const c = v[(i + 1) % v.length], k = a[0] * c[1] - c[0] * a[1]; A += k; x += (a[0] + c[0]) * k; y += (a[1] + c[1]) * k; }); return A ? [x / 3 / A, y / 3 / A] : v[0]; };
+  // area-weighted centre; measured from the first corner, because raw lat/lng products cancel and lose the precision
+  const centroid = v => { const o = v[0], w = v.map(a => [a[0] - o[0], a[1] - o[1]]); let A = 0, x = 0, y = 0; w.forEach((a, i) => { const c = w[(i + 1) % w.length], k = a[0] * c[1] - c[0] * a[1]; A += k; x += (a[0] + c[0]) * k; y += (a[1] + c[1]) * k; }); return A ? [o[0] + x / 3 / A, o[1] + y / 3 / A] : o; };
+  const inPoly = (q, v) => { let c = false; for (let i = 0, j = v.length - 1; i < v.length; j = i++) { const a = v[i], b = v[j]; if ((a[0] > q[0]) !== (b[0] > q[0]) && q[1] < (b[1] - a[1]) * (q[0] - a[0]) / (b[0] - a[0]) + a[1]) c = !c; } return c; };
+  // for an L-shaped road the centre falls outside: use a point 3 m inside the middle of its longest side instead
+  const inward = (a, c, v) => { const kx = 111320 * Math.cos(a[0] * Math.PI / 180), m = [(a[0] + c[0]) / 2, (a[1] + c[1]) / 2], ex = (c[1] - a[1]) * kx, ey = (c[0] - a[0]) * 110540, l = Math.hypot(ex, ey);
+    for (const sgn of [1, -1]) { const q = [m[0] + sgn * ex / l * 3 / 110540, m[1] - sgn * ey / l * 3 / kx]; if (inPoly(q, v)) return q; } return null; };
+  { const t = centroid([[20.4, 72.8], [20.4, 72.8001], [20.4001, 72.8001], [20.4001, 72.8]]); console.assert(Math.abs(t[0] - 20.40005) < 1e-9 && Math.abs(t[1] - 72.80005) < 1e-9, 'centroid() self-check failed'); }
   const fit = v => { const bb = new G.LatLngBounds(); v.forEach(q => bb.extend(LL(q))); map.fitBounds(bb, 140); G.event.addListenerOnce(map, 'idle', () => map.getZoom() > 19 && map.setZoom(19)); };
   const dash = (color, gap) => ({ strokeOpacity: 0, icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeColor: color, strokeWeight: 1.5, scale: 2 }, offset: '0', repeat: gap }] });
   const line = (v, o) => new G.Polyline({ path: v.map(LL), clickable: false, ...o });
@@ -429,9 +435,9 @@ function renderMap(p, edit, params) {
       // labels are sized from the shape, so they grow and shrink with the map and vanish when too small to read
       const side = Math.sqrt(area(pl.pts)) / mpp, f = plot ? Math.min(side * .3, 28) : Math.min(side * .13, 14);
       if (pl.no && f >= 6.500) {
-        let rot = 0, longest = 0; // road and garden names run along the shape's longest side
-        if (!plot) pl.pts.forEach((a, i) => { const c = pl.pts[(i + 1) % pl.pts.length], d = dist(a, c); if (d > longest) { longest = d; rot = angle(a, c); } });
-        layer.label(centroid(pl.pts), `<div class="c"><span style="font-size:${f.toFixed(1)}px;transform:rotate(${rot.toFixed(1)}deg)">${esc(pl.no)}${pl === sel && plot && !edit ? `<small>${fmtArea(+pl.area || 0)}</small>` : ''}</span></div>`,
+        let rot = 0, longest = 0, at = centroid(pl.pts); // road and garden names run along the shape's longest side
+        if (!plot) pl.pts.forEach((a, i) => { const c = pl.pts[(i + 1) % pl.pts.length], d = dist(a, c); if (d > longest) { longest = d; rot = angle(a, c); if (!inPoly(centroid(pl.pts), pl.pts)) at = inward(a, c, pl.pts) || at; } });
+        layer.label(at, `<div class="c"><span style="font-size:${f.toFixed(1)}px;transform:rotate(${rot.toFixed(1)}deg)">${esc(pl.no)}${pl === sel && plot && !edit ? `<small>${fmtArea(+pl.area || 0)}</small>` : ''}</span></div>`,
           `no${plot ? '' : ' faint'}${pl === sel ? ' on' : ''}`);
       }
       poly.addListener('click', e => mode ? onClick(e) : select(pl)); // while drawing or measuring, the click goes on to the map
